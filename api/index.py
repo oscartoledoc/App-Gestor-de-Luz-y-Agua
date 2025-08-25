@@ -1,10 +1,9 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Este es el código principal de tu aplicación Flask,
-# modificado para usar Firestore.
+# Código principal de la aplicación Flask
 # =======================================================
 
-from flask import Flask, render_template_string, request, redirect, url_for, session
+from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
 from datetime import datetime
 import json
 import os
@@ -18,237 +17,522 @@ app.secret_key = os.urandom(24) # Clave secreta para las sesiones
 # =======================================================
 # Configuración y conexión a Firestore
 # =======================================================
-# Para Vercel, se debe establecer la variable de entorno
-# FIREBASE_CREDENTIALS con el contenido del JSON de la
-# clave de servicio de Firebase.
-# Para pruebas locales, puedes tener el archivo en tu
-# proyecto y referenciarlo aquí.
 try:
     if os.environ.get('FIREBASE_CREDENTIALS'):
-        # Leer el contenido de la variable de entorno en Vercel
         cred_json = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
         cred = credentials.Certificate(cred_json)
     else:
-        # Esto es solo para pruebas locales si tienes un archivo de credenciales
-        # Nota: Vercel ignora esta parte.
-        cred = credentials.Certificate("path/to/your/service-account-key.json")
+        # Esto es solo para pruebas locales
+        cred = credentials.Certificate("firebase-service-account.json")
     
-    # Inicializar la app de Firebase si no está inicializada
     if not firebase_admin._apps:
         firebase_admin.initialize_app(cred)
     db = firestore.client()
+    print("DEBUG: Conexión a Firebase exitosa.")
 
 except Exception as e:
-    # Si hay un error al conectar a Firebase, lo imprimirá aquí.
-    print(f"Error al inicializar Firebase: {e}")
+    print(f"ERROR: Error al inicializar Firebase: {e}")
     db = None
+
+# Parámetros por defecto (se almacenarán en la base de datos)
+NUM_FAMILIAS = 5
+COSTO_KWH_DEFECTO = 0.50
+COSTO_M3_DEFECTO = 2.00
+LOGIN_USER = "admin"
+LOGIN_PASS = "123"
+
+# Colecciones de Firestore
+FAMILIAS_COLLECTION = "familias"
+CONSUMOS_COLLECTION = "consumos"
+CONFIG_DOC = "config"
+LOGIN_DOC = "login"
 
 # =======================================================
 # Lógica de carga y guardado de datos con Firestore
 # =======================================================
-def get_consumos():
-    """Lee todos los documentos de la colección 'consumos'."""
+def cargar_datos_desde_firebase():
+    """
+    Carga los datos iniciales o existentes de las familias, consumos y configuración
+    desde Firestore.
+    """
     if db is None:
-        return {}
-    
+        print("DEBUG: La conexión a Firebase falló. Usando datos por defecto.")
+        # Retorna datos por defecto si Firebase no está disponible
+        return {
+            "familias": [{"id": f"familia_{i}", "nombre": f"Familia {i}"} for i in range(1, NUM_FAMILIAS + 1)],
+            "consumos": [],
+            "config": {
+                "costo_kwh": COSTO_KWH_DEFECTO,
+                "costo_m3": COSTO_M3_DEFECTO
+            },
+            "login": {
+                "usuario": LOGIN_USER,
+                "contrasena": LOGIN_PASS
+            }
+        }
+        
     try:
-        # Suponemos una colección 'consumos' donde cada documento es un registro
-        docs = db.collection('consumos').stream()
-        consumos_data = {doc.id: doc.to_dict() for doc in docs}
-        return consumos_data
-    except Exception as e:
-        print(f"Error al leer de Firestore: {e}")
-        return {}
+        # Cargar configuración y login
+        config_ref = db.collection(CONFIG_DOC).document(LOGIN_DOC)
+        config_data = config_ref.get().to_dict()
+        if not config_data:
+            config_data = {
+                "costo_kwh": COSTO_KWH_DEFECTO,
+                "costo_m3": COSTO_M3_DEFECTO,
+                "usuario": LOGIN_USER,
+                "contrasena": LOGIN_PASS
+            }
+            config_ref.set(config_data)
+            print("DEBUG: Se inicializó la configuración en Firestore.")
 
-def save_consumo(new_consumo):
+        # Cargar familias
+        familias = []
+        familias_ref = db.collection(FAMILIAS_COLLECTION).order_by("id")
+        familias_docs = list(familias_ref.stream())
+        if not familias_docs:
+            print("DEBUG: No se encontraron familias. Inicializando 5 familias.")
+            for i in range(1, NUM_FAMILIAS + 1):
+                familia_id = f"familia_{i}"
+                familia_data = {"id": familia_id, "nombre": f"Familia {i}"}
+                db.collection(FAMILIAS_COLLECTION).document(familia_id).set(familia_data)
+                familias.append(familia_data)
+        else:
+            familias = [doc.to_dict() for doc in familias_docs]
+            print(f"DEBUG: Se cargaron {len(familias)} familias.")
+
+        # Cargar consumos
+        consumos = []
+        print("DEBUG: Intentando cargar consumos desde la colección 'consumos'.")
+        consumos_ref = db.collection(CONSUMOS_COLLECTION).order_by("fecha", direction=firestore.Query.DESCENDING)
+        consumos_docs = consumos_ref.stream()
+        for doc in consumos_docs:
+            consumo = doc.to_dict()
+            consumo['id'] = doc.id
+            consumos.append(consumo)
+        
+        print(f"DEBUG: Se cargaron {len(consumos)} registros de consumo.")
+        
+        return {
+            "familias": familias,
+            "consumos": consumos,
+            "config": {
+                "costo_kwh": config_data.get("costo_kwh"),
+                "costo_m3": config_data.get("costo_m3")
+            },
+            "login": {
+                "usuario": config_data.get("usuario"),
+                "contrasena": config_data.get("contrasena")
+            }
+        }
+    except Exception as e:
+        print(f"ERROR: Error al leer/inicializar datos en Firestore: {e}")
+        return {
+            "familias": [{"id": f"familia_{i}", "nombre": f"Familia {i}"} for i in range(1, NUM_FAMILIAS + 1)],
+            "consumos": [],
+            "config": {
+                "costo_kwh": COSTO_KWH_DEFECTO,
+                "costo_m3": COSTO_M3_DEFECTO
+            },
+            "login": {
+                "usuario": LOGIN_USER,
+                "contrasena": LOGIN_PASS
+            }
+        }
+
+def guardar_consumo_en_firebase(nuevo_consumo):
     """Guarda un nuevo registro de consumo en Firestore."""
     if db is None:
-        print("Error: db object is None. Firebase not initialized.")
+        print("DEBUG: No se pudo guardar. La conexión a Firebase falló.")
         return False
     
     try:
-        # Añadir un nuevo documento a la colección 'consumos'
-        db.collection('consumos').add(new_consumo)
+        print("DEBUG: Intentando guardar un nuevo consumo.")
+        db.collection(CONSUMOS_COLLECTION).add(nuevo_consumo)
+        print("DEBUG: Consumo guardado exitosamente.")
         return True
     except Exception as e:
-        # Esta es la nueva línea que nos dará el error exacto
-        print(f"Error al escribir en Firestore: {e}")
+        print(f"ERROR: Error al escribir en Firestore: {e}")
+        return False
+
+def actualizar_familias_y_costos(familias_data, costos_data):
+    """Actualiza los nombres de familias y costos en Firestore."""
+    if db is None:
+        print("DEBUG: No se pudo actualizar. La conexión a Firebase falló.")
+        return False
+        
+    try:
+        print("DEBUG: Intentando actualizar familias y costos.")
+        # Actualizar nombres de familias
+        for familia in familias_data:
+            db.collection(FAMILIAS_COLLECTION).document(familia['id']).update({"nombre": familia['nombre']})
+        
+        # Actualizar costos
+        db.collection(CONFIG_DOC).document(LOGIN_DOC).update(costos_data)
+        print("DEBUG: Configuración actualizada exitosamente.")
+        return True
+    except Exception as e:
+        print(f"ERROR: Error al actualizar la configuración en Firestore: {e}")
         return False
 
 # =======================================================
-# Rutas de la aplicación (adaptadas a Firestore)
+# Rutas de la aplicación
 # =======================================================
 
-@app.route('/')
-def home():
-    if 'usuario' not in session:
+@app.before_request
+def verificar_login():
+    """Redirige al login si el usuario no ha iniciado sesión, excepto en la ruta de login."""
+    if 'usuario' not in session and request.endpoint not in ['login', 'static']:
         return redirect(url_for('login'))
-    
-    # Obtener los datos de consumo de Firestore
-    consumos = get_consumos()
-    
-    # Calcular el total de consumo y el costo
-    total_consumo = sum(float(c.get('consumo', 0)) for c in consumos.values())
-    total_costo = sum(float(c.get('costo', 0)) for c in consumos.values())
-    
-    # Renderizar el HTML de la página principal
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Control de Consumo</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
-        <style>
-            body { font-family: 'Inter', sans-serif; }
-        </style>
-    </head>
-    <body class="bg-gray-100 p-8">
-        <div class="max-w-4xl mx-auto bg-white p-8 rounded-xl shadow-lg">
-            <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">Control de Consumo Eléctrico</h1>
-            <div class="mb-8 p-6 bg-blue-50 rounded-xl shadow-md flex justify-around items-center">
-                <div class="text-center">
-                    <p class="text-gray-600 font-medium">Consumo Total (kWh)</p>
-                    <p class="text-4xl font-bold text-blue-600">{{ "%.2f"|format(total_consumo) }}</p>
-                </div>
-                <div class="text-center">
-                    <p class="text-gray-600 font-medium">Costo Total ($)</p>
-                    <p class="text-4xl font-bold text-green-600">{{ "%.2f"|format(total_costo) }}</p>
-                </div>
-            </div>
 
-            <form action="/agregar_consumo" method="post" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Maneja el inicio de sesión."""
+    if request.method == "POST":
+        usuario = request.form.get("usuario")
+        contrasena = request.form.get("contrasena")
+        datos = cargar_datos_desde_firebase()
+        
+        if usuario == datos["login"]["usuario"] and contrasena == datos["login"]["contrasena"]:
+            session['usuario'] = usuario
+            return redirect(url_for('index'))
+        else:
+            return render_template_string(LOGIN_HTML, error="Usuario o contraseña incorrectos.")
+    
+    return render_template_string(LOGIN_HTML)
+
+@app.route("/logout")
+def logout():
+    """Cierra la sesión del usuario."""
+    session.pop('usuario', None)
+    return redirect(url_for('login'))
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    """Página principal para ingresar datos y ver el historial."""
+    datos = cargar_datos_desde_firebase()
+    mensaje = ""
+
+    if request.method == "POST":
+        try:
+            familia_id = request.form["familia"]
+            servicio = request.form["servicio"]
+            fecha = request.form["fecha"]
+            consumo = float(request.form["consumo"])
+        except (ValueError, KeyError):
+            mensaje = "Error: Por favor, introduce datos válidos."
+            return render_template_string(INDEX_HTML, 
+                                          familias=datos["familias"], 
+                                          historial=datos["consumos"],
+                                          config=datos["config"],
+                                          mensaje=mensaje)
+
+        familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
+        
+        if servicio == "Luz":
+            costo_unidad = datos["config"]["costo_kwh"]
+            unidad = "kWh"
+        else: # "Agua"
+            costo_unidad = datos["config"]["costo_m3"]
+            unidad = "m³"
+        
+        costo_total = consumo * costo_unidad
+        
+        nuevo_consumo = {
+            "fecha": fecha,
+            "familia_id": familia_id,
+            "familia_nombre": familia_nombre,
+            "servicio": servicio,
+            "consumo": consumo,
+            "unidad": unidad,
+            "costo_total": costo_total
+        }
+        
+        if guardar_consumo_en_firebase(nuevo_consumo):
+            mensaje = "Datos guardados correctamente."
+        else:
+            mensaje = "Error al guardar los datos."
+
+        return redirect(url_for('index'))
+    
+    historial = sorted(datos["consumos"], key=lambda x: x["fecha"], reverse=True)
+    print(f"DEBUG: Pasando {len(historial)} registros al template.")
+    
+    return render_template_string(INDEX_HTML, 
+                                  familias=datos["familias"], 
+                                  historial=historial,
+                                  config=datos["config"])
+
+@app.route("/configuracion", methods=["GET", "POST"])
+def configuracion():
+    """Página para editar nombres de familias y costos."""
+    datos = cargar_datos_desde_firebase()
+    mensaje = ""
+
+    if request.method == "POST":
+        try:
+            # Recopilar datos de familias
+            familias_actualizadas = []
+            for familia in datos["familias"]:
+                nuevo_nombre = request.form.get(f"familia_nombre_{familia['id']}")
+                familias_actualizadas.append({"id": familia['id'], "nombre": nuevo_nombre})
+            
+            # Recopilar datos de costos
+            costos_actualizados = {
+                "costo_kwh": float(request.form["costo_kwh"]),
+                "costo_m3": float(request.form["costo_m3"])
+            }
+            
+            if actualizar_familias_y_costos(familias_actualizadas, costos_actualizados):
+                mensaje = "Configuración guardada correctamente."
+            else:
+                mensaje = "Error al guardar la configuración."
+        except (ValueError, KeyError):
+            mensaje = "Error: Por favor, introduce datos válidos para la configuración."
+    
+    # Volver a cargar los datos para reflejar los cambios
+    datos = cargar_datos_desde_firebase()
+    
+    return render_template_string(CONFIG_HTML, 
+                                  familias=datos["familias"], 
+                                  config=datos["config"],
+                                  mensaje=mensaje)
+
+# =======================================================
+# HTML de la aplicación (plantillas)
+# =======================================================
+
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - App de Consumo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+        <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">Iniciar Sesión</h2>
+        {% if error %}
+        <p class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-xl">{{ error }}</p>
+        {% endif %}
+        <form action="{{ url_for('login') }}" method="POST">
+            <div class="mb-4">
+                <label for="usuario" class="block text-gray-700 text-sm font-semibold mb-2">Usuario</label>
+                <input type="text" id="usuario" name="usuario" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
+            </div>
+            <div class="mb-6">
+                <label for="contrasena" class="block text-gray-700 text-sm font-semibold mb-2">Contraseña</label>
+                <input type="password" id="contrasena" name="contrasena" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
+            </div>
+            <div class="flex items-center justify-between">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl focus:outline-none focus:shadow-outline transition-all duration-300">
+                    Entrar
+                </button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
+INDEX_HTML = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App de Consumo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+    <div class="container mx-auto">
+        <!-- Encabezado y Navegación -->
+        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
+            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
+            <nav class="flex space-x-4">
+                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
+                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
+                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
+            </nav>
+        </div>
+
+        <!-- Mensajes de la aplicación -->
+        {% if mensaje %}
+        <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
+        {% endif %}
+
+        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Consumo</h2>
+            <form action="{{ url_for('index') }}" method="POST" class="space-y-6">
+
+                <!-- Select de Familia -->
                 <div>
-                    <label for="consumo" class="block text-gray-700 font-medium mb-1">Consumo (kWh)</label>
-                    <input type="number" id="consumo" name="consumo" step="0.01" class="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200" required>
+                    <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
+                    <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
+                        {% for familia in familias %}
+                        <option value="{{ familia.id }}">{{ familia.nombre }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
+
+                <!-- Select de Servicio -->
                 <div>
-                    <label for="costo" class="block text-gray-700 font-medium mb-1">Costo ($)</label>
-                    <input type="number" id="costo" name="costo" step="0.01" class="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200" required>
+                    <label for="servicio" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
+                    <select id="servicio" name="servicio" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
+                        <option value="Luz">Luz (kWh)</option>
+                        <option value="Agua">Agua (m³)</option>
+                    </select>
                 </div>
-                <div class="md:col-span-2">
-                    <label for="fecha" class="block text-gray-700 font-medium mb-1">Fecha</label>
-                    <input type="date" id="fecha" name="fecha" class="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200" required>
+
+                <!-- Campo de Fecha -->
+                <div>
+                    <label for="fecha" class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
+                    <input type="date" id="fecha" name="fecha" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
-                <div class="md:col-span-2">
-                    <button type="submit" class="w-full bg-blue-600 text-white font-bold p-3 rounded-md hover:bg-blue-700 transition duration-200">Agregar Consumo</button>
+
+                <!-- Campo de Consumo -->
+                <div>
+                    <label for="consumo" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Consumo:</label>
+                    <input type="number" step="0.01" id="consumo" name="consumo" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
+                        Guardar Consumo
+                    </button>
                 </div>
             </form>
-            
-            <h2 class="text-2xl font-bold mb-4 text-gray-800">Registros</h2>
-            <div class="bg-gray-50 p-4 rounded-xl shadow-inner overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-100">
+        </div>
+        
+        <!-- Historial de Consumos -->
+        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Historial de Consumos</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 rounded-xl">
+                    <thead class="bg-gray-50">
                         <tr>
-                            <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Fecha</th>
-                            <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Consumo (kWh)</th>
-                            <th class="px-6 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Costo ($)</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Familia</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Servicio</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Consumo</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Costo Total</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
-                        <!-- Loop para mostrar los consumos -->
-                        {% for consumo in consumos.values() %}
+                        {% for consumo in historial %}
+                        <tr class="hover:bg-gray-50 transition-colors duration-100">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ consumo.fecha }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.familia_nombre }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.servicio }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">S/ {{ "%.2f"|format(consumo.costo_total) }}</td>
+                        </tr>
+                        {% else %}
                         <tr>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <div class="text-sm text-gray-900">{{ consumo['fecha'] }}</div>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <div class="text-sm text-gray-900">{{ "%.2f"|format(consumo['consumo']) }}</div>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <div class="text-sm text-gray-900">{{ "%.2f"|format(consumo['costo']) }}</div>
-                            </td>
+                            <td colspan="5" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos de consumo registrados aún.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-
-            <div class="flex justify-end mt-8">
-                <a href="/logout" class="bg-red-500 text-white font-bold py-2 px-4 rounded-md hover:bg-red-600 transition duration-200">Cerrar Sesión</a>
-            </div>
         </div>
-        <!-- Script para establecer la fecha actual -->
-        <script>
-            window.addEventListener('DOMContentLoaded', (event) => {
-                const today = new Date();
-                const year = today.getFullYear();
-                const month = String(today.getMonth() + 1).padStart(2, '0');
-                const day = String(today.getDate()).padStart(2, '0');
-                const formattedDate = `${year}-${month}-${day}`;
-                document.getElementById('fecha').value = formattedDate;
-            });
-        </script>
-    </body>
-    </html>
-    """
-    return render_template_string(html_content, total_consumo=total_consumo, total_costo=total_costo, consumos=consumos)
+    </div>
+    <!-- Script para establecer la fecha actual -->
+    <script>
+        window.addEventListener('DOMContentLoaded', (event) => {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            const formattedDate = `${year}-${month}-${day}`;
+            const fechaInput = document.getElementById('fecha');
+            if (fechaInput) {
+                fechaInput.value = formattedDate;
+            }
+        });
+    </script>
+</body>
+</html>
+"""
 
-@app.route('/agregar_consumo', methods=['POST'])
-def agregar_consumo():
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
+CONFIG_HTML = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuración - App de Consumo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+    <div class="container mx-auto">
+        <!-- Encabezado y Navegación -->
+        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
+            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
+            <nav class="flex space-x-4">
+                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
+                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
+                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
+            </nav>
+        </div>
         
-    fecha = request.form['fecha']
-    consumo = float(request.form['consumo'])
-    costo = float(request.form['costo'])
-    
-    new_consumo = {
-        'fecha': fecha,
-        'consumo': consumo,
-        'costo': costo
-    }
-    
-    if save_consumo(new_consumo):
-        return redirect(url_for('home'))
-    else:
-        # Modificado para no mostrar un error genérico
-        return "Error al guardar el consumo. Revisa los logs de Vercel para más detalles.", 500
+        <!-- Mensajes de la aplicación -->
+        {% if mensaje %}
+        <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
+        {% endif %}
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        if request.form['password'] == '123':
-            session['usuario'] = 'admin'
-            return redirect(url_for('home'))
-        else:
-            return "Contraseña incorrecta", 401
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Login</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
-        <style>
-            body { font-family: 'Inter', sans-serif; }
-        </style>
-    </head>
-    <body class="bg-gray-100 flex items-center justify-center min-h-screen">
-        <div class="w-full max-w-md p-8 bg-white rounded-xl shadow-lg">
-            <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">Login</h1>
-            <form action="/login" method="post" class="space-y-4">
-                <div>
-                    <label for="password" class="block text-gray-700 font-medium mb-1">Contraseña</label>
-                    <input type="password" id="password" name="password" class="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200" required>
+        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ajustar Configuración</h2>
+            <form action="{{ url_for('configuracion') }}" method="POST" class="space-y-6">
+                <!-- Nombres de Familias -->
+                <div class="space-y-4">
+                    <h3 class="text-xl font-semibold text-gray-700">Nombres de Familias</h3>
+                    {% for familia in familias %}
+                    <div>
+                        <label for="familia_nombre_{{ familia.id }}" class="block text-sm font-medium text-gray-700 mb-1">{{ familia.nombre }}:</label>
+                        <input type="text" id="familia_nombre_{{ familia.id }}" name="familia_nombre_{{ familia.id }}" value="{{ familia.nombre }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
+                    </div>
+                    {% endfor %}
                 </div>
-                <button type="submit" class="w-full bg-blue-600 text-white font-bold p-3 rounded-md hover:bg-blue-700 transition duration-200">Ingresar</button>
+                
+                <hr class="my-6 border-gray-200">
+
+                <!-- Costos por Unidad -->
+                <div class="space-y-4">
+                    <h3 class="text-xl font-semibold text-gray-700">Costos por Unidad (S/)</h3>
+                    <div>
+                        <label for="costo_kwh" class="block text-sm font-medium text-gray-700 mb-1">Costo por kWh (Luz):</label>
+                        <input type="number" step="0.01" id="costo_kwh" name="costo_kwh" value="{{ config.costo_kwh }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
+                    </div>
+                    <div>
+                        <label for="costo_m3" class="block text-sm font-medium text-gray-700 mb-1">Costo por m³ (Agua):</label>
+                        <input type="number" step="0.01" id="costo_m3" name="costo_m3" value="{{ config.costo_m3 }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
+                        Guardar Configuración
+                    </button>
+                </div>
             </form>
         </div>
-    </body>
-    </html>
-    """
-    return render_template_string(html_content)
-
-@app.route('/logout')
-def logout():
-    session.pop('usuario', None)
-    return redirect(url_for('login'))
+    </div>
+</body>
+</html>
+"""
 
 if __name__ == '__main__':
     # Esto es solo para pruebas locales, Vercel no lo usará
+    print("DEBUG: Iniciando la aplicación Flask en modo de desarrollo.")
     app.run(debug=True)
