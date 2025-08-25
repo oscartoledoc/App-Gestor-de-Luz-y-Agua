@@ -39,6 +39,7 @@ except Exception as e:
 NUM_FAMILIAS = 5
 COSTO_KWH_DEFECTO = 0.50
 COSTO_M3_DEFECTO = 2.00
+IGV_PORCENTAJE = 0.18  # 18% IGV
 LOGIN_USER = "admin"
 LOGIN_PASS = "123"
 
@@ -64,7 +65,8 @@ def cargar_datos_desde_firebase():
             "consumos": [],
             "config": {
                 "costo_kwh": COSTO_KWH_DEFECTO,
-                "costo_m3": COSTO_M3_DEFECTO
+                "costo_m3": COSTO_M3_DEFECTO,
+                "igv_porcentaje": IGV_PORCENTAJE
             },
             "login": {
                 "usuario": LOGIN_USER,
@@ -80,11 +82,18 @@ def cargar_datos_desde_firebase():
             config_data = {
                 "costo_kwh": COSTO_KWH_DEFECTO,
                 "costo_m3": COSTO_M3_DEFECTO,
+                "igv_porcentaje": IGV_PORCENTAJE,
                 "usuario": LOGIN_USER,
                 "contrasena": LOGIN_PASS
             }
             config_ref.set(config_data)
             print("DEBUG: Se inicializó la configuración en Firestore.")
+        else:
+            # Asegurar que el campo del IGV exista en la configuración
+            if 'igv_porcentaje' not in config_data:
+                config_data['igv_porcentaje'] = IGV_PORCENTAJE
+                config_ref.update({'igv_porcentaje': IGV_PORCENTAJE})
+
 
         # Cargar familias
         familias = []
@@ -106,6 +115,9 @@ def cargar_datos_desde_firebase():
         print("DEBUG: Intentando cargar consumos desde la colección 'consumos'.")
         consumos_ref = db.collection(CONSUMOS_COLLECTION).order_by("fecha", direction=firestore.Query.DESCENDING)
         consumos_docs = consumos_ref.stream()
+        
+        igv_porcentaje = config_data.get('igv_porcentaje', IGV_PORCENTAJE)
+        
         for doc in consumos_docs:
             consumo = doc.to_dict()
             
@@ -114,12 +126,19 @@ def cargar_datos_desde_firebase():
                 print(f"ADVERTENCIA: Documento de consumo incompleto, se saltará: {doc.id}")
                 continue # Saltar este documento y continuar con el siguiente
             
-            # Calcular costo_total antes de agregarlo a la lista de consumos
+            # Calcular subtotal, IGV y costo_total
             if consumo['servicio'] == 'Luz':
-                costo_total = consumo['consumo'] * config_data.get('costo_kwh', COSTO_KWH_DEFECTO)
+                costo_unidad = config_data.get('costo_kwh', COSTO_KWH_DEFECTO)
             else:
-                costo_total = consumo['consumo'] * config_data.get('costo_m3', COSTO_M3_DEFECTO)
+                costo_unidad = config_data.get('costo_m3', COSTO_M3_DEFECTO)
+            
+            subtotal = consumo['consumo'] * costo_unidad
+            igv_monto = subtotal * igv_porcentaje
+            costo_total = subtotal + igv_monto
+            
             consumo['costo_total'] = costo_total
+            consumo['subtotal'] = subtotal
+            consumo['igv_monto'] = igv_monto
             consumo['id'] = doc.id
             consumos.append(consumo)
         
@@ -130,7 +149,8 @@ def cargar_datos_desde_firebase():
             "consumos": consumos,
             "config": {
                 "costo_kwh": config_data.get("costo_kwh"),
-                "costo_m3": config_data.get("costo_m3")
+                "costo_m3": config_data.get("costo_m3"),
+                "igv_porcentaje": igv_porcentaje
             },
             "login": {
                 "usuario": config_data.get("usuario"),
@@ -144,7 +164,8 @@ def cargar_datos_desde_firebase():
             "consumos": [],
             "config": {
                 "costo_kwh": COSTO_KWH_DEFECTO,
-                "costo_m3": COSTO_M3_DEFECTO
+                "costo_m3": COSTO_M3_DEFECTO,
+                "igv_porcentaje": IGV_PORCENTAJE
             },
             "login": {
                 "usuario": LOGIN_USER,
@@ -290,8 +311,12 @@ def index():
         else: # "Agua"
             costo_unidad = datos["config"]["costo_m3"]
             unidad = "m³"
-        
-        costo_total = consumo * costo_unidad
+
+        # Cálculo con IGV
+        subtotal = consumo * costo_unidad
+        igv_porcentaje = datos["config"]["igv_porcentaje"]
+        igv_monto = subtotal * igv_porcentaje
+        costo_total = subtotal + igv_monto
         
         nuevo_consumo = {
             "fecha": fecha,
@@ -300,6 +325,8 @@ def index():
             "servicio": servicio,
             "consumo": consumo,
             "unidad": unidad,
+            "subtotal": subtotal,
+            "igv_monto": igv_monto,
             "costo_total": costo_total
         }
         
@@ -316,7 +343,9 @@ def index():
     return render_template_string(INDEX_HTML, 
                                   familias=datos["familias"], 
                                   historial=historial,
-                                  config=datos["config"])
+                                  config=datos["config"],
+                                  mensaje=request.args.get('mensaje', ''))
+
 
 @app.route("/configuracion", methods=["GET", "POST"])
 def configuracion():
@@ -335,7 +364,8 @@ def configuracion():
             # Recopilar datos de costos
             costos_actualizados = {
                 "costo_kwh": float(request.form["costo_kwh"]),
-                "costo_m3": float(request.form["costo_m3"])
+                "costo_m3": float(request.form["costo_m3"]),
+                "igv_porcentaje": float(request.form["igv_porcentaje"])
             }
             
             if actualizar_familias_y_costos(familias_actualizadas, costos_actualizados):
@@ -373,7 +403,7 @@ def editar_consumo(consumo_id):
     return render_template_string(EDIT_HTML,
                                   consumo=consumo,
                                   familias=datos["familias"],
-                                  mensaje="")
+                                  mensaje=request.args.get('mensaje', ''))
 
 @app.route("/actualizar/<string:consumo_id>", methods=["POST"])
 def actualizar_consumo(consumo_id):
@@ -395,7 +425,11 @@ def actualizar_consumo(consumo_id):
             costo_unidad = datos_globales["config"]["costo_m3"]
             unidad = "m³"
         
-        costo_total = consumo_valor * costo_unidad
+        # Recalcular con IGV
+        igv_porcentaje = datos_globales["config"]["igv_porcentaje"]
+        subtotal = consumo_valor * costo_unidad
+        igv_monto = subtotal * igv_porcentaje
+        costo_total = subtotal + igv_monto
         
         nuevos_datos = {
             "fecha": fecha,
@@ -404,6 +438,8 @@ def actualizar_consumo(consumo_id):
             "servicio": servicio,
             "consumo": consumo_valor,
             "unidad": unidad,
+            "subtotal": subtotal,
+            "igv_monto": igv_monto,
             "costo_total": costo_total
         }
         
@@ -470,6 +506,40 @@ INDEX_HTML = """
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
+        .tooltip-container {
+            position: relative;
+            display: inline-block;
+        }
+        .tooltip {
+            visibility: hidden;
+            width: 140px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px 0;
+            position: absolute;
+            z-index: 10;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -70px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .tooltip::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #333 transparent transparent transparent;
+        }
+        .tooltip-container:hover .tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
@@ -555,7 +625,16 @@ INDEX_HTML = """
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.familia_nombre }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.servicio }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">S/ {{ "%.2f"|format(consumo.costo_total) }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                <div class="tooltip-container">
+                                    S/ {{ "%.2f"|format(consumo.costo_total) }}
+                                    <span class="tooltip">
+                                        Subtotal: S/ {{ "%.2f"|format(consumo.subtotal) }}<br>
+                                        IGV (18%): S/ {{ "%.2f"|format(consumo.igv_monto) }}<br>
+                                        Total: S/ {{ "%.2f"|format(consumo.costo_total) }}
+                                    </span>
+                                </div>
+                            </td>
                             <!-- Botón de Editar -->
                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                 <a href="{{ url_for('editar_consumo', consumo_id=consumo.id) }}" class="text-blue-600 hover:text-blue-900">Editar</a>
@@ -729,6 +808,10 @@ CONFIG_HTML = """
                     <div>
                         <label for="costo_m3" class="block text-sm font-medium text-gray-700 mb-1">Costo por m³ (Agua):</label>
                         <input type="number" step="0.01" id="costo_m3" name="costo_m3" value="{{ config.costo_m3 }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
+                    </div>
+                    <div>
+                        <label for="igv_porcentaje" class="block text-sm font-medium text-gray-700 mb-1">Porcentaje de IGV (ej: 0.18 para 18%):</label>
+                        <input type="number" step="0.01" id="igv_porcentaje" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
                     </div>
                 </div>
 
