@@ -9,6 +9,7 @@ import json
 import os
 import firebase_admin
 from firebase_admin import credentials, firestore
+from firebase_admin.exceptions import FirebaseError
 
 # Asegúrate de que el objeto de la app se llame 'app'
 app = Flask(__name__)
@@ -108,7 +109,7 @@ def cargar_datos_desde_firebase():
         for doc in consumos_docs:
             consumo = doc.to_dict()
             
-            # **NUEVA VERIFICACIÓN DE CLAVES**
+            # Verificación de claves para evitar errores
             if 'servicio' not in consumo or 'consumo' not in consumo:
                 print(f"ADVERTENCIA: Documento de consumo incompleto, se saltará: {doc.id}")
                 continue # Saltar este documento y continuar con el siguiente
@@ -184,6 +185,49 @@ def actualizar_familias_y_costos(familias_data, costos_data):
         return True
     except Exception as e:
         print(f"ERROR: Error al actualizar la configuración en Firestore: {e}")
+        return False
+
+def eliminar_consumo_en_firebase(consumo_id):
+    """Elimina un documento de consumo de Firestore."""
+    if db is None:
+        return False
+    try:
+        db.collection(CONSUMOS_COLLECTION).document(consumo_id).delete()
+        print(f"DEBUG: Consumo con ID {consumo_id} eliminado exitosamente.")
+        return True
+    except FirebaseError as e:
+        print(f"ERROR: No se pudo eliminar el consumo: {e}")
+        return False
+
+def obtener_consumo_por_id(consumo_id):
+    """Obtiene un único documento de consumo de Firestore por su ID."""
+    if db is None:
+        return None
+    try:
+        doc_ref = db.collection(CONSUMOS_COLLECTION).document(consumo_id)
+        doc = doc_ref.get()
+        if doc.exists:
+            consumo = doc.to_dict()
+            consumo['id'] = doc.id
+            return consumo
+        else:
+            print(f"ERROR: No se encontró el consumo con ID {consumo_id}.")
+            return None
+    except FirebaseError as e:
+        print(f"ERROR: No se pudo obtener el consumo por ID: {e}")
+        return None
+
+def actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
+    """Actualiza un documento de consumo existente en Firestore."""
+    if db is None:
+        return False
+    try:
+        doc_ref = db.collection(CONSUMOS_COLLECTION).document(consumo_id)
+        doc_ref.update(nuevos_datos)
+        print(f"DEBUG: Consumo con ID {consumo_id} actualizado exitosamente.")
+        return True
+    except FirebaseError as e:
+        print(f"ERROR: No se pudo actualizar el consumo: {e}")
         return False
 
 # =======================================================
@@ -308,6 +352,71 @@ def configuracion():
                                   familias=datos["familias"], 
                                   config=datos["config"],
                                   mensaje=mensaje)
+
+@app.route("/eliminar/<string:consumo_id>", methods=["POST"])
+def eliminar_consumo(consumo_id):
+    """Ruta para eliminar un registro de consumo."""
+    if eliminar_consumo_en_firebase(consumo_id):
+        return redirect(url_for('index', mensaje="Registro eliminado correctamente."))
+    else:
+        return redirect(url_for('index', mensaje="Error al eliminar el registro."))
+
+@app.route("/editar/<string:consumo_id>", methods=["GET"])
+def editar_consumo(consumo_id):
+    """Ruta para mostrar el formulario de edición."""
+    consumo = obtener_consumo_por_id(consumo_id)
+    if not consumo:
+        return redirect(url_for('index', mensaje="Registro no encontrado."))
+    
+    datos = cargar_datos_desde_firebase()
+    
+    return render_template_string(EDIT_HTML,
+                                  consumo=consumo,
+                                  familias=datos["familias"],
+                                  mensaje="")
+
+@app.route("/actualizar/<string:consumo_id>", methods=["POST"])
+def actualizar_consumo(consumo_id):
+    """Ruta para procesar la actualización del formulario."""
+    datos_globales = cargar_datos_desde_firebase()
+    mensaje = ""
+    try:
+        familia_id = request.form["familia"]
+        servicio = request.form["servicio"]
+        fecha = request.form["fecha"]
+        consumo_valor = float(request.form["consumo"])
+
+        familia_nombre = [f['nombre'] for f in datos_globales['familias'] if f['id'] == familia_id][0]
+        
+        if servicio == "Luz":
+            costo_unidad = datos_globales["config"]["costo_kwh"]
+            unidad = "kWh"
+        else: # "Agua"
+            costo_unidad = datos_globales["config"]["costo_m3"]
+            unidad = "m³"
+        
+        costo_total = consumo_valor * costo_unidad
+        
+        nuevos_datos = {
+            "fecha": fecha,
+            "familia_id": familia_id,
+            "familia_nombre": familia_nombre,
+            "servicio": servicio,
+            "consumo": consumo_valor,
+            "unidad": unidad,
+            "costo_total": costo_total
+        }
+        
+        if actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
+            mensaje = "Registro actualizado correctamente."
+        else:
+            mensaje = "Error al actualizar el registro."
+    
+    except (ValueError, KeyError):
+        mensaje = "Error: Por favor, introduce datos válidos."
+
+    return redirect(url_for('index', mensaje=mensaje))
+
 
 # =======================================================
 # HTML de la aplicación (plantillas)
@@ -435,6 +544,8 @@ INDEX_HTML = """
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Servicio</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Consumo</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Costo Total</th>
+                            <th scope="col" class="relative px-6 py-3"><span class="sr-only">Editar</span></th>
+                            <th scope="col" class="relative px-6 py-3"><span class="sr-only">Eliminar</span></th>
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
@@ -445,10 +556,20 @@ INDEX_HTML = """
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.servicio }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">S/ {{ "%.2f"|format(consumo.costo_total) }}</td>
+                            <!-- Botón de Editar -->
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <a href="{{ url_for('editar_consumo', consumo_id=consumo.id) }}" class="text-blue-600 hover:text-blue-900">Editar</a>
+                            </td>
+                            <!-- Botón de Eliminar (con formulario POST para mayor seguridad) -->
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <form action="{{ url_for('eliminar_consumo', consumo_id=consumo.id) }}" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas eliminar este registro?');">
+                                    <button type="submit" class="text-red-600 hover:text-red-900">Eliminar</button>
+                                </form>
+                            </td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="5" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos de consumo registrados aún.</td>
+                            <td colspan="7" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos de consumo registrados aún.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -470,6 +591,85 @@ INDEX_HTML = """
             }
         });
     </script>
+</body>
+</html>
+"""
+
+EDIT_HTML = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editar Consumo - App de Consumo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+    <div class="container mx-auto">
+        <!-- Encabezado y Navegación -->
+        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
+            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
+            <nav class="flex space-x-4">
+                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
+                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
+                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
+            </nav>
+        </div>
+        
+        <!-- Mensajes de la aplicación -->
+        {% if mensaje %}
+        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
+        {% endif %}
+
+        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Editar Consumo</h2>
+            <form action="{{ url_for('actualizar_consumo', consumo_id=consumo.id) }}" method="POST" class="space-y-6">
+
+                <!-- Select de Familia -->
+                <div>
+                    <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
+                    <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
+                        {% for familia in familias %}
+                        <option value="{{ familia.id }}" {% if consumo.familia_id == familia.id %}selected{% endif %}>{{ familia.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Select de Servicio -->
+                <div>
+                    <label for="servicio" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
+                    <select id="servicio" name="servicio" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
+                        <option value="Luz" {% if consumo.servicio == 'Luz' %}selected{% endif %}>Luz (kWh)</option>
+                        <option value="Agua" {% if consumo.servicio == 'Agua' %}selected{% endif %}>Agua (m³)</option>
+                    </select>
+                </div>
+
+                <!-- Campo de Fecha -->
+                <div>
+                    <label for="fecha" class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
+                    <input type="date" id="fecha" name="fecha" value="{{ consumo.fecha }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
+                </div>
+
+                <!-- Campo de Consumo -->
+                <div>
+                    <label for="consumo" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Consumo:</label>
+                    <input type="number" step="0.01" id="consumo" name="consumo" value="{{ consumo.consumo }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
+                </div>
+
+                <div class="flex justify-end space-x-4">
+                    <a href="{{ url_for('index') }}" class="inline-flex items-center px-6 py-3 border border-gray-300 text-sm font-medium rounded-xl text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300">
+                        Cancelar
+                    </a>
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
+                        Guardar Cambios
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
 """
@@ -543,6 +743,7 @@ CONFIG_HTML = """
 </body>
 </html>
 """
+
 
 if __name__ == '__main__':
     # Esto es solo para pruebas locales, Vercel no lo usará
