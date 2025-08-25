@@ -107,6 +107,12 @@ def cargar_datos_desde_firebase():
         consumos_docs = consumos_ref.stream()
         for doc in consumos_docs:
             consumo = doc.to_dict()
+            # Calcular costo_total antes de agregarlo a la lista de consumos
+            if consumo['servicio'] == 'Luz':
+                costo_total = consumo['consumo'] * config_data.get('costo_kwh', COSTO_KWH_DEFECTO)
+            else:
+                costo_total = consumo['consumo'] * config_data.get('costo_m3', COSTO_M3_DEFECTO)
+            consumo['costo_total'] = costo_total
             consumo['id'] = doc.id
             consumos.append(consumo)
         
