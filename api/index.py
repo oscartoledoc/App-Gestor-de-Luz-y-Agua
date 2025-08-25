@@ -119,28 +119,15 @@ def cargar_datos_desde_firebase():
         igv_porcentaje = config_data.get('igv_porcentaje', IGV_PORCENTAJE)
         
         for doc in consumos_docs:
-            consumo = doc.to_dict()
+            consumo_data = doc.to_dict()
             
             # Verificación de claves para evitar errores
-            if 'servicio' not in consumo or 'consumo' not in consumo:
+            if 'servicio' not in consumo_data or 'consumo' not in consumo_data or 'lectura' not in consumo_data:
                 print(f"ADVERTENCIA: Documento de consumo incompleto, se saltará: {doc.id}")
                 continue # Saltar este documento y continuar con el siguiente
             
-            # Calcular subtotal, IGV y costo_total
-            if consumo['servicio'] == 'Luz':
-                costo_unidad = config_data.get('costo_kwh', COSTO_KWH_DEFECTO)
-            else:
-                costo_unidad = config_data.get('costo_m3', COSTO_M3_DEFECTO)
-            
-            subtotal = consumo['consumo'] * costo_unidad
-            igv_monto = subtotal * igv_porcentaje
-            costo_total = subtotal + igv_monto
-            
-            consumo['costo_total'] = costo_total
-            consumo['subtotal'] = subtotal
-            consumo['igv_monto'] = igv_monto
-            consumo['id'] = doc.id
-            consumos.append(consumo)
+            consumo_data['id'] = doc.id
+            consumos.append(consumo_data)
         
         print(f"DEBUG: Se cargaron {len(consumos)} registros de consumo.")
         
@@ -294,7 +281,7 @@ def index():
             familia_id = request.form["familia"]
             servicio = request.form["servicio"]
             fecha = request.form["fecha"]
-            consumo = float(request.form["consumo"])
+            lectura_actual = float(request.form["lectura"])
         except (ValueError, KeyError):
             mensaje = "Error: Por favor, introduce datos válidos."
             return render_template_string(INDEX_HTML, 
@@ -304,6 +291,24 @@ def index():
                                           mensaje=mensaje)
 
         familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
+        
+        # Encontrar la lectura anterior
+        lectura_anterior = 0
+        try:
+            # Consulta para la última lectura para esta familia y servicio
+            last_reading_query = db.collection(CONSUMOS_COLLECTION) \
+                                   .where("familia_id", "==", familia_id) \
+                                   .where("servicio", "==", servicio) \
+                                   .order_by("fecha", direction=firestore.Query.DESCENDING) \
+                                   .limit(1)
+            last_reading_doc = next(last_reading_query.stream(), None)
+            
+            if last_reading_doc:
+                lectura_anterior = last_reading_doc.to_dict().get("lectura", 0)
+        except Exception as e:
+            print(f"ERROR: No se pudo obtener la lectura anterior: {e}")
+            
+        consumo = max(0, lectura_actual - lectura_anterior)
         
         if servicio == "Luz":
             costo_unidad = datos["config"]["costo_kwh"]
@@ -323,6 +328,8 @@ def index():
             "familia_id": familia_id,
             "familia_nombre": familia_nombre,
             "servicio": servicio,
+            "lectura": lectura_actual,
+            "lectura_anterior": lectura_anterior,
             "consumo": consumo,
             "unidad": unidad,
             "subtotal": subtotal,
@@ -335,7 +342,7 @@ def index():
         else:
             mensaje = "Error al guardar los datos."
 
-        return redirect(url_for('index'))
+        return redirect(url_for('index', mensaje=mensaje))
     
     historial = sorted(datos["consumos"], key=lambda x: x["fecha"], reverse=True)
     print(f"DEBUG: Pasando {len(historial)} registros al template.")
@@ -414,9 +421,29 @@ def actualizar_consumo(consumo_id):
         familia_id = request.form["familia"]
         servicio = request.form["servicio"]
         fecha = request.form["fecha"]
-        consumo_valor = float(request.form["consumo"])
+        lectura_actual = float(request.form["lectura"])
 
         familia_nombre = [f['nombre'] for f in datos_globales['familias'] if f['id'] == familia_id][0]
+        
+        # Encontrar la lectura anterior
+        lectura_anterior = 0
+        try:
+            # Busca la lectura más reciente que NO sea el documento actual y que sea anterior a la fecha actual
+            # Esto es para evitar usar la lectura que se está editando como la anterior a sí misma
+            last_reading_query = db.collection(CONSUMOS_COLLECTION) \
+                                   .where("familia_id", "==", familia_id) \
+                                   .where("servicio", "==", servicio) \
+                                   .where(firestore.FieldPath.document_id(), "!=", consumo_id) \
+                                   .order_by("fecha", direction=firestore.Query.DESCENDING) \
+                                   .limit(1)
+            last_reading_doc = next(last_reading_query.stream(), None)
+            
+            if last_reading_doc:
+                lectura_anterior = last_reading_doc.to_dict().get("lectura", 0)
+        except Exception as e:
+            print(f"ERROR: No se pudo obtener la lectura anterior para la actualización: {e}")
+
+        consumo_valor = max(0, lectura_actual - lectura_anterior)
         
         if servicio == "Luz":
             costo_unidad = datos_globales["config"]["costo_kwh"]
@@ -436,6 +463,8 @@ def actualizar_consumo(consumo_id):
             "familia_id": familia_id,
             "familia_nombre": familia_nombre,
             "servicio": servicio,
+            "lectura": lectura_actual,
+            "lectura_anterior": lectura_anterior,
             "consumo": consumo_valor,
             "unidad": unidad,
             "subtotal": subtotal,
@@ -560,7 +589,7 @@ INDEX_HTML = """
         {% endif %}
 
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
-            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Consumo</h2>
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Lectura</h2>
             <form action="{{ url_for('index') }}" method="POST" class="space-y-6">
 
                 <!-- Select de Familia -->
@@ -588,15 +617,15 @@ INDEX_HTML = """
                     <input type="date" id="fecha" name="fecha" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
 
-                <!-- Campo de Consumo -->
+                <!-- Campo de Lectura -->
                 <div>
-                    <label for="consumo" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Consumo:</label>
-                    <input type="number" step="0.01" id="consumo" name="consumo" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
+                    <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
+                    <input type="number" step="0.01" id="lectura" name="lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
 
                 <div class="flex justify-end">
                     <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
-                        Guardar Consumo
+                        Guardar Lectura
                     </button>
                 </div>
             </form>
@@ -612,6 +641,8 @@ INDEX_HTML = """
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Familia</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Servicio</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lectura Anterior</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lectura Actual</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Consumo</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Costo Total</th>
                             <th scope="col" class="relative px-6 py-3"><span class="sr-only">Editar</span></th>
@@ -624,6 +655,8 @@ INDEX_HTML = """
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ consumo.fecha }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.familia_nombre }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.servicio }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura_anterior) }} {{ consumo.unidad }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                 <div class="tooltip-container">
@@ -732,10 +765,10 @@ EDIT_HTML = """
                     <input type="date" id="fecha" name="fecha" value="{{ consumo.fecha }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
 
-                <!-- Campo de Consumo -->
+                <!-- Campo de Lectura -->
                 <div>
-                    <label for="consumo" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Consumo:</label>
-                    <input type="number" step="0.01" id="consumo" name="consumo" value="{{ consumo.consumo }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
+                    <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
+                    <input type="number" step="0.01" id="lectura" name="lectura" value="{{ consumo.lectura }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
 
                 <div class="flex justify-end space-x-4">
