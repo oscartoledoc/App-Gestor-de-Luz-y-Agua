@@ -107,6 +107,12 @@ def cargar_datos_desde_firebase():
         consumos_docs = consumos_ref.stream()
         for doc in consumos_docs:
             consumo = doc.to_dict()
+            
+            # **NUEVA VERIFICACIÓN DE CLAVES**
+            if 'servicio' not in consumo or 'consumo' not in consumo:
+                print(f"ADVERTENCIA: Documento de consumo incompleto, se saltará: {doc.id}")
+                continue # Saltar este documento y continuar con el siguiente
+            
             # Calcular costo_total antes de agregarlo a la lista de consumos
             if consumo['servicio'] == 'Luz':
                 costo_total = consumo['consumo'] * config_data.get('costo_kwh', COSTO_KWH_DEFECTO)
