@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask
+# Código principal de la aplicación Flask (Versión corregida)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
@@ -113,7 +113,8 @@ def cargar_datos_desde_firebase():
         # Cargar consumos
         consumos = []
         print("DEBUG: Intentando cargar consumos desde la colección 'consumos'.")
-        consumos_ref = db.collection(CONSUMOS_COLLECTION).order_by("fecha", direction=firestore.Query.DESCENDING)
+        # Ya no ordenamos aquí, lo haremos en Python para mayor fiabilidad
+        consumos_ref = db.collection(CONSUMOS_COLLECTION)
         consumos_docs = consumos_ref.stream()
         
         igv_porcentaje = config_data.get('igv_porcentaje', IGV_PORCENTAJE)
@@ -292,22 +293,28 @@ def index():
 
         familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
         
-        # Encontrar la lectura anterior
+        # === INICIO DE LA LÓGICA CORREGIDA ===
         lectura_anterior = 0
         try:
-            # Consulta para la última lectura para esta familia y servicio
-            last_reading_query = db.collection(CONSUMOS_COLLECTION) \
-                                   .where("familia_id", "==", familia_id) \
-                                   .where("servicio", "==", servicio) \
-                                   .order_by("fecha", direction=firestore.Query.DESCENDING) \
-                                   .limit(1)
-            last_reading_doc = next(last_reading_query.stream(), None)
+            # Obtener todos los consumos para esta familia y servicio
+            consumos_ref = db.collection(CONSUMOS_COLLECTION) \
+                             .where("familia_id", "==", familia_id) \
+                             .where("servicio", "==", servicio)
             
-            if last_reading_doc:
-                lectura_anterior = last_reading_doc.to_dict().get("lectura", 0)
+            readings_list = [doc.to_dict() for doc in consumos_ref.stream()]
+            
+            # Ordenar los registros por fecha en Python
+            sorted_readings = sorted(readings_list, key=lambda x: x.get('fecha', '0'), reverse=True)
+
+            # Si hay registros anteriores, obtener la lectura del más reciente
+            if sorted_readings:
+                lectura_anterior = sorted_readings[0].get("lectura", 0)
+        
         except Exception as e:
             print(f"ERROR: No se pudo obtener la lectura anterior: {e}")
             
+        # === FIN DE LA LÓGICA CORREGIDA ===
+
         consumo = max(0, lectura_actual - lectura_anterior)
         
         if servicio == "Luz":
@@ -425,23 +432,26 @@ def actualizar_consumo(consumo_id):
 
         familia_nombre = [f['nombre'] for f in datos_globales['familias'] if f['id'] == familia_id][0]
         
-        # Encontrar la lectura anterior
+        # === INICIO DE LA LÓGICA CORREGIDA PARA EDICIÓN ===
         lectura_anterior = 0
         try:
-            # Busca la lectura más reciente que NO sea el documento actual y que sea anterior a la fecha actual
-            # Esto es para evitar usar la lectura que se está editando como la anterior a sí misma
-            last_reading_query = db.collection(CONSUMOS_COLLECTION) \
-                                   .where("familia_id", "==", familia_id) \
-                                   .where("servicio", "==", servicio) \
-                                   .where(firestore.FieldPath.document_id(), "!=", consumo_id) \
-                                   .order_by("fecha", direction=firestore.Query.DESCENDING) \
-                                   .limit(1)
-            last_reading_doc = next(last_reading_query.stream(), None)
+            # Obtener todos los consumos para esta familia y servicio, excluyendo el actual
+            consumos_ref = db.collection(CONSUMOS_COLLECTION) \
+                             .where("familia_id", "==", familia_id) \
+                             .where("servicio", "==", servicio)
             
-            if last_reading_doc:
-                lectura_anterior = last_reading_doc.to_dict().get("lectura", 0)
+            readings_list = [doc.to_dict() for doc in consumos_ref.stream() if doc.id != consumo_id]
+            
+            # Ordenar los registros por fecha en Python
+            sorted_readings = sorted(readings_list, key=lambda x: x.get('fecha', '0'), reverse=True)
+
+            # Si hay registros anteriores, obtener la lectura del más reciente
+            if sorted_readings:
+                lectura_anterior = sorted_readings[0].get("lectura", 0)
+        
         except Exception as e:
-            print(f"ERROR: No se pudo obtener la lectura anterior para la actualización: {e}")
+            print(f"ERROR: No se pudo obtener la lectura anterior: {e}")
+        # === FIN DE LA LÓGICA CORREGIDA PARA EDICIÓN ===
 
         consumo_valor = max(0, lectura_actual - lectura_anterior)
         
