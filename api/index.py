@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final Corregida)
+# Código principal de la aplicación Flask (Versión Final con Filtros y Lógica Temporal)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
@@ -14,7 +14,7 @@ from firebase_admin.exceptions import FirebaseError
 # Asegúrate de que el objeto de la app se llame 'app'
 app = Flask(__name__)
 app.secret_key = os.urandom(24) # Clave secreta para las sesiones
-app.permanent_session_lifetime = timedelta(minutes=30) # Duración de la sesión: 30 minutos exactos
+app.permanent_session_lifetime = timedelta(minutes=30) # Duración de la sesión: 30 minutos
 
 # =======================================================
 # Configuración y conexión a Firestore
@@ -178,7 +178,7 @@ def actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
         return False
 
 # =======================================================
-# NUEVA FUNCIÓN: LÓGICA CORE PARA CALCULAR LECTURA ANTERIOR
+# FUNCIÓN CORE: CALCULAR LECTURA ANTERIOR (TIME-AWARE)
 # =======================================================
 def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None):
     """
@@ -480,7 +480,6 @@ INDEX_HTML = """
                 <div>
                     <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
                     <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200" required>
-        
                         <option value="" disabled selected>-- Selecciona una familia --</option>
                         {% for familia in familias %}
                         <option value="{{ familia.id }}">{{ familia.nombre }}</option>
@@ -509,7 +508,24 @@ INDEX_HTML = """
         </div>
         
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
-            <h2 class="text-2xl font-bold mb-6 text-gray-800">Historial de Consumos</h2>
+            <div class="flex flex-col md:flex-row justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4 md:mb-0">Historial de Consumos</h2>
+                
+                <div class="flex flex-col md:flex-row gap-4 w-full md:w-auto">
+                    <select id="filtroFamilia" onchange="aplicarFiltros()" class="border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-xl shadow-sm text-sm py-2 px-3">
+                        <option value="">Todas las Familias</option>
+                        {% for familia in familias %}
+                        <option value="{{ familia.nombre }}">{{ familia.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                    <select id="filtroServicio" onchange="aplicarFiltros()" class="border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-xl shadow-sm text-sm py-2 px-3">
+                        <option value="">Todos los Servicios</option>
+                        <option value="Luz">Luz</option>
+                        <option value="Agua">Agua</option>
+                    </select>
+                </div>
+                </div>
+
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200 rounded-xl">
                     <thead class="bg-gray-50">
@@ -527,10 +543,10 @@ INDEX_HTML = """
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
                         {% for consumo in historial %}
-                        <tr class="hover:bg-gray-50 transition-colors duration-100">
+                        <tr class="hover:bg-gray-50 transition-colors duration-100 fila-dato">
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ consumo.fecha }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.familia_nombre }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ consumo.servicio }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-familia">{{ consumo.familia_nombre }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-servicio">{{ consumo.servicio }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura_anterior) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
@@ -573,6 +589,27 @@ INDEX_HTML = """
             const fechaInput = document.getElementById('fecha');
             if (fechaInput) { fechaInput.value = formattedDate; }
         });
+
+        // === LÓGICA DE FILTRADO JS (Client-Side) ===
+        function aplicarFiltros() {
+            const filtroFamilia = document.getElementById('filtroFamilia').value.toLowerCase();
+            const filtroServicio = document.getElementById('filtroServicio').value.toLowerCase();
+            const filas = document.querySelectorAll('.fila-dato');
+
+            filas.forEach(fila => {
+                const textoFamilia = fila.querySelector('.celda-familia').textContent.toLowerCase();
+                const textoServicio = fila.querySelector('.celda-servicio').textContent.toLowerCase();
+
+                const coincideFamilia = filtroFamilia === "" || textoFamilia.includes(filtroFamilia);
+                const coincideServicio = filtroServicio === "" || textoServicio.includes(filtroServicio);
+
+                if (coincideFamilia && coincideServicio) {
+                    fila.style.display = '';
+                } else {
+                    fila.style.display = 'none';
+                }
+            });
+        }
     </script>
 </body>
 </html>
