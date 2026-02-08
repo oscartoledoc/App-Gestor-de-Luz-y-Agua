@@ -4,7 +4,7 @@
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 import firebase_admin
@@ -14,6 +14,7 @@ from firebase_admin.exceptions import FirebaseError
 # Asegúrate de que el objeto de la app se llame 'app'
 app = Flask(__name__)
 app.secret_key = os.urandom(24) # Clave secreta para las sesiones
+app.permanent_session_lifetime = timedelta(minutes=30) # Duración de la sesión
 
 # =======================================================
 # Configuración y conexión a Firestore
@@ -261,6 +262,7 @@ def login():
         datos = cargar_datos_desde_firebase()
         
         if usuario == datos["login"]["usuario"] and contrasena == datos["login"]["contrasena"]:
+            session.permanent = True
             session['usuario'] = usuario
             return redirect(url_for('index'))
         else:
