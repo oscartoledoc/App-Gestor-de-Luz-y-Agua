@@ -479,7 +479,9 @@ INDEX_HTML = """
             <form action="{{ url_for('index') }}" method="POST" class="space-y-6">
                 <div>
                     <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
-                    <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
+                    <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200" required>
+        
+                        <option value="" disabled selected>-- Selecciona una familia --</option>
                         {% for familia in familias %}
                         <option value="{{ familia.id }}">{{ familia.nombre }}</option>
                         {% endfor %}
