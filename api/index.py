@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión corregida y optimizada)
+# Código principal de la aplicación Flask (Versión Final Corregida)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
@@ -14,7 +14,7 @@ from firebase_admin.exceptions import FirebaseError
 # Asegúrate de que el objeto de la app se llame 'app'
 app = Flask(__name__)
 app.secret_key = os.urandom(24) # Clave secreta para las sesiones
-app.permanent_session_lifetime = timedelta(minutes=30) # Duración de la sesión
+app.permanent_session_lifetime = timedelta(minutes=30) # Duración de la sesión: 30 minutos exactos
 
 # =======================================================
 # Configuración y conexión a Firestore
@@ -36,7 +36,7 @@ except Exception as e:
     print(f"ERROR: Error al inicializar Firebase: {e}")
     db = None
 
-# Parámetros por defecto (se almacenarán en la base de datos)
+# Parámetros por defecto
 NUM_FAMILIAS = 5
 COSTO_KWH_DEFECTO = 0.50
 COSTO_M3_DEFECTO = 2.00
@@ -54,25 +54,13 @@ LOGIN_DOC = "login"
 # Lógica de carga y guardado de datos con Firestore
 # =======================================================
 def cargar_datos_desde_firebase():
-    """
-    Carga los datos iniciales o existentes de las familias, consumos y configuración
-    desde Firestore.
-    """
+    """Carga los datos iniciales o existentes de las familias, consumos y configuración."""
     if db is None:
-        print("DEBUG: La conexión a Firebase falló. Usando datos por defecto.")
-        # Retorna datos por defecto si Firebase no está disponible
         return {
             "familias": [{"id": f"familia_{i}", "nombre": f"Familia {i}"} for i in range(1, NUM_FAMILIAS + 1)],
             "consumos": [],
-            "config": {
-                "costo_kwh": COSTO_KWH_DEFECTO,
-                "costo_m3": COSTO_M3_DEFECTO,
-                "igv_porcentaje": IGV_PORCENTAJE
-            },
-            "login": {
-                "usuario": LOGIN_USER,
-                "contrasena": LOGIN_PASS
-            }
+            "config": {"costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, "igv_porcentaje": IGV_PORCENTAJE},
+            "login": {"usuario": LOGIN_USER, "contrasena": LOGIN_PASS}
         }
         
     try:
@@ -81,27 +69,20 @@ def cargar_datos_desde_firebase():
         config_data = config_ref.get().to_dict()
         if not config_data:
             config_data = {
-                "costo_kwh": COSTO_KWH_DEFECTO,
-                "costo_m3": COSTO_M3_DEFECTO,
-                "igv_porcentaje": IGV_PORCENTAJE,
-                "usuario": LOGIN_USER,
-                "contrasena": LOGIN_PASS
+                "costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, 
+                "igv_porcentaje": IGV_PORCENTAJE, "usuario": LOGIN_USER, "contrasena": LOGIN_PASS
             }
             config_ref.set(config_data)
-            print("DEBUG: Se inicializó la configuración en Firestore.")
         else:
-            # Asegurar que el campo del IGV exista en la configuración
             if 'igv_porcentaje' not in config_data:
                 config_data['igv_porcentaje'] = IGV_PORCENTAJE
                 config_ref.update({'igv_porcentaje': IGV_PORCENTAJE})
-
 
         # Cargar familias
         familias = []
         familias_ref = db.collection(FAMILIAS_COLLECTION).order_by("id")
         familias_docs = list(familias_ref.stream())
         if not familias_docs:
-            print("DEBUG: No se encontraron familias. Inicializando 5 familias.")
             for i in range(1, NUM_FAMILIAS + 1):
                 familia_id = f"familia_{i}"
                 familia_data = {"id": familia_id, "nombre": f"Familia {i}"}
@@ -109,11 +90,9 @@ def cargar_datos_desde_firebase():
                 familias.append(familia_data)
         else:
             familias = [doc.to_dict() for doc in familias_docs]
-            print(f"DEBUG: Se cargaron {len(familias)} familias.")
 
         # Cargar consumos
         consumos = []
-        print("DEBUG: Intentando cargar consumos desde la colección 'consumos'.")
         consumos_ref = db.collection(CONSUMOS_COLLECTION)
         consumos_docs = consumos_ref.stream()
         
@@ -121,16 +100,10 @@ def cargar_datos_desde_firebase():
         
         for doc in consumos_docs:
             consumo_data = doc.to_dict()
-            
-            # Verificación de claves para evitar errores
             if 'servicio' not in consumo_data or 'consumo' not in consumo_data or 'lectura' not in consumo_data:
-                print(f"ADVERTENCIA: Documento de consumo incompleto, se saltará: {doc.id}")
-                continue # Saltar este documento y continuar con el siguiente
-            
+                continue
             consumo_data['id'] = doc.id
             consumos.append(consumo_data)
-        
-        print(f"DEBUG: Se cargaron {len(consumos)} registros de consumo.")
         
         return {
             "familias": familias,
@@ -146,102 +119,105 @@ def cargar_datos_desde_firebase():
             }
         }
     except Exception as e:
-        print(f"ERROR: Error al leer/inicializar datos en Firestore: {e}")
+        print(f"ERROR: Error al leer datos: {e}")
         return {
             "familias": [{"id": f"familia_{i}", "nombre": f"Familia {i}"} for i in range(1, NUM_FAMILIAS + 1)],
             "consumos": [],
-            "config": {
-                "costo_kwh": COSTO_KWH_DEFECTO,
-                "costo_m3": COSTO_M3_DEFECTO,
-                "igv_porcentaje": IGV_PORCENTAJE
-            },
-            "login": {
-                "usuario": LOGIN_USER,
-                "contrasena": LOGIN_PASS
-            }
+            "config": {"costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, "igv_porcentaje": IGV_PORCENTAJE},
+            "login": {"usuario": LOGIN_USER, "contrasena": LOGIN_PASS}
         }
 
 def guardar_consumo_en_firebase(nuevo_consumo):
-    """Guarda un nuevo registro de consumo en Firestore."""
-    if db is None:
-        print("DEBUG: No se pudo guardar. La conexión a Firebase falló.")
-        return False
-    
+    if db is None: return False
     try:
-        print("DEBUG: Intentando guardar un nuevo consumo.")
-        # Agregamos un timestamp para un ordenamiento más preciso en el futuro
         nuevo_consumo['timestamp'] = firestore.SERVER_TIMESTAMP
         db.collection(CONSUMOS_COLLECTION).add(nuevo_consumo)
-        print("DEBUG: Consumo guardado exitosamente.")
         return True
     except Exception as e:
-        print(f"ERROR: Error al escribir en Firestore: {e}")
+        print(f"ERROR: Error al guardar: {e}")
         return False
 
 def actualizar_familias_y_costos(familias_data, costos_data):
-    """Actualiza los nombres de familias y costos en Firestore."""
-    if db is None:
-        print("DEBUG: No se pudo actualizar. La conexión a Firebase falló.")
-        return False
-        
+    if db is None: return False
     try:
-        print("DEBUG: Intentando actualizar familias y costos.")
-        # Actualizar nombres de familias
         for familia in familias_data:
             db.collection(FAMILIAS_COLLECTION).document(familia['id']).update({"nombre": familia['nombre']})
-        
-        # Actualizar costos
         db.collection(CONFIG_DOC).document(LOGIN_DOC).update(costos_data)
-        print("DEBUG: Configuración actualizada exitosamente.")
         return True
     except Exception as e:
-        print(f"ERROR: Error al actualizar la configuración en Firestore: {e}")
+        print(f"ERROR: Error al actualizar config: {e}")
         return False
 
 def eliminar_consumo_en_firebase(consumo_id):
-    """Elimina un documento de consumo de Firestore."""
-    if db is None:
-        return False
+    if db is None: return False
     try:
         db.collection(CONSUMOS_COLLECTION).document(consumo_id).delete()
-        print(f"DEBUG: Consumo con ID {consumo_id} eliminado exitosamente.")
         return True
-    except FirebaseError as e:
-        print(f"ERROR: No se pudo eliminar el consumo: {e}")
+    except FirebaseError:
         return False
 
 def obtener_consumo_por_id(consumo_id):
-    """Obtiene un único documento de consumo de Firestore por su ID."""
-    if db is None:
-        return None
+    if db is None: return None
     try:
-        doc_ref = db.collection(CONSUMOS_COLLECTION).document(consumo_id)
-        doc = doc_ref.get()
+        doc = db.collection(CONSUMOS_COLLECTION).document(consumo_id).get()
         if doc.exists:
             consumo = doc.to_dict()
             consumo['id'] = doc.id
             return consumo
-        else:
-            print(f"ERROR: No se encontró el consumo con ID {consumo_id}.")
-            return None
-    except FirebaseError as e:
-        print(f"ERROR: No se pudo obtener el consumo por ID: {e}")
+        return None
+    except FirebaseError:
         return None
 
 def actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
-    """Actualiza un documento de consumo existente en Firestore."""
-    if db is None:
-        return False
+    if db is None: return False
     try:
-        doc_ref = db.collection(CONSUMOS_COLLECTION).document(consumo_id)
-        # Agregamos o actualizamos el timestamp al editar para mantener el orden
         nuevos_datos['timestamp'] = firestore.SERVER_TIMESTAMP
-        doc_ref.update(nuevos_datos)
-        print(f"DEBUG: Consumo con ID {consumo_id} actualizado exitosamente.")
+        db.collection(CONSUMOS_COLLECTION).document(consumo_id).update(nuevos_datos)
         return True
-    except FirebaseError as e:
-        print(f"ERROR: No se pudo actualizar el consumo: {e}")
+    except FirebaseError:
         return False
+
+# =======================================================
+# NUEVA FUNCIÓN: LÓGICA CORE PARA CALCULAR LECTURA ANTERIOR
+# =======================================================
+def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None):
+    """
+    Busca la lectura más reciente que sea estrictamente ANTERIOR a la fecha_corte.
+    """
+    lectura_anterior = 0
+    if db is None: return 0
+
+    try:
+        # 1. Traer todos los consumos de esa familia y servicio
+        consumos_ref = db.collection(CONSUMOS_COLLECTION)\
+                         .where("familia_id", "==", familia_id)\
+                         .where("servicio", "==", servicio)
+        
+        docs = consumos_ref.stream()
+        
+        candidatos = []
+        for doc in docs:
+            # Si estamos editando, saltar el documento actual para no compararlo consigo mismo
+            if excluir_id and doc.id == excluir_id:
+                continue
+            
+            data = doc.to_dict()
+            # 2. FILTRO CLAVE: Solo registros con fecha MENOR a la actual
+            if data.get('fecha', '9999-99-99') < fecha_corte:
+                candidatos.append(data)
+        
+        # 3. Ordenar: El más reciente de los pasados va primero
+        if candidatos:
+            candidatos.sort(key=lambda x: x.get('fecha', '0'), reverse=True)
+            lectura_anterior = candidatos[0].get('lectura', 0)
+            print(f"DEBUG: Lectura anterior encontrada ({candidatos[0]['fecha']}): {lectura_anterior}")
+        else:
+            print("DEBUG: No hay lecturas previas a esta fecha. Se inicia en 0.")
+
+    except Exception as e:
+        print(f"ERROR: Fallo al calcular lectura anterior: {e}")
+    
+    return lectura_anterior
 
 # =======================================================
 # Rutas de la aplicación
@@ -249,36 +225,31 @@ def actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
 
 @app.before_request
 def verificar_login():
-    """Redirige al login si el usuario no ha iniciado sesión, excepto en la ruta de login."""
     if 'usuario' not in session and request.endpoint not in ['login', 'static']:
         return redirect(url_for('login'))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """Maneja el inicio de sesión."""
     if request.method == "POST":
         usuario = request.form.get("usuario")
         contrasena = request.form.get("contrasena")
         datos = cargar_datos_desde_firebase()
         
         if usuario == datos["login"]["usuario"] and contrasena == datos["login"]["contrasena"]:
-            session.permanent = True
+            session.permanent = True # Activa los 30 minutos
             session['usuario'] = usuario
             return redirect(url_for('index'))
         else:
             return render_template_string(LOGIN_HTML, error="Usuario o contraseña incorrectos.")
-    
     return render_template_string(LOGIN_HTML)
 
 @app.route("/logout")
 def logout():
-    """Cierra la sesión del usuario."""
     session.pop('usuario', None)
     return redirect(url_for('login'))
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    """Página principal para ingresar datos y ver el historial."""
     datos = cargar_datos_desde_firebase()
     mensaje = ""
 
@@ -290,50 +261,23 @@ def index():
             lectura_actual = float(request.form["lectura"])
         except (ValueError, KeyError):
             mensaje = "Error: Por favor, introduce datos válidos."
-            return render_template_string(INDEX_HTML, 
-                                          familias=datos["familias"], 
-                                          historial=datos["consumos"],
-                                          config=datos["config"],
-                                          mensaje=mensaje)
+            return render_template_string(INDEX_HTML, familias=datos["familias"], historial=datos["consumos"], config=datos["config"], mensaje=mensaje)
 
         familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
         
-        # === INICIO DE LA LÓGICA CORREGIDA PARA OBTENER LA LECTURA ANTERIOR ===
-        lectura_anterior = 0
-        try:
-            # Obtener todos los consumos para esta familia y servicio
-            consumos_ref = db.collection(CONSUMOS_COLLECTION) \
-                             .where("familia_id", "==", familia_id) \
-                             .where("servicio", "==", servicio)
-            
-            readings_list = [doc.to_dict() for doc in consumos_ref.stream()]
-            
-            # Ordenar los registros por timestamp (o fecha como respaldo) en Python
-            sorted_readings = sorted(
-                readings_list, 
-                key=lambda x: x.get('timestamp') or x.get('fecha', '0'), 
-                reverse=True
-            )
-
-            # Si hay registros anteriores, obtener la lectura del más reciente
-            if sorted_readings:
-                lectura_anterior = sorted_readings[0].get("lectura", 0)
-        
-        except Exception as e:
-            print(f"ERROR: No se pudo obtener la lectura anterior: {e}")
-            
-        # === FIN DE LA LÓGICA CORREGIDA ===
+        # === USO DE LA NUEVA LÓGICA ===
+        lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
+        # ==============================
 
         consumo = max(0, lectura_actual - lectura_anterior)
         
         if servicio == "Luz":
             costo_unidad = datos["config"]["costo_kwh"]
             unidad = "kWh"
-        else: # "Agua"
+        else:
             costo_unidad = datos["config"]["costo_m3"]
             unidad = "m³"
 
-        # Cálculo con IGV
         subtotal = consumo * costo_unidad
         igv_porcentaje = datos["config"]["igv_porcentaje"]
         igv_monto = subtotal * igv_porcentaje
@@ -357,34 +301,24 @@ def index():
             mensaje = "Datos guardados correctamente."
         else:
             mensaje = "Error al guardar los datos."
-
+        
         return redirect(url_for('index', mensaje=mensaje))
     
     historial = sorted(datos["consumos"], key=lambda x: x.get("timestamp") or x.get("fecha", '0'), reverse=True)
-    print(f"DEBUG: Pasando {len(historial)} registros al template.")
-    
-    return render_template_string(INDEX_HTML, 
-                                  familias=datos["familias"], 
-                                  historial=historial,
-                                  config=datos["config"],
-                                  mensaje=request.args.get('mensaje', ''))
+    return render_template_string(INDEX_HTML, familias=datos["familias"], historial=historial, config=datos["config"], mensaje=request.args.get('mensaje', ''))
 
 
 @app.route("/configuracion", methods=["GET", "POST"])
 def configuracion():
-    """Página para editar nombres de familias y costos."""
     datos = cargar_datos_desde_firebase()
     mensaje = ""
-
     if request.method == "POST":
         try:
-            # Recopilar datos de familias
             familias_actualizadas = []
             for familia in datos["familias"]:
                 nuevo_nombre = request.form.get(f"familia_nombre_{familia['id']}")
                 familias_actualizadas.append({"id": familia['id'], "nombre": nuevo_nombre})
             
-            # Recopilar datos de costos
             costos_actualizados = {
                 "costo_kwh": float(request.form["costo_kwh"]),
                 "costo_m3": float(request.form["costo_m3"]),
@@ -396,19 +330,13 @@ def configuracion():
             else:
                 mensaje = "Error al guardar la configuración."
         except (ValueError, KeyError):
-            mensaje = "Error: Por favor, introduce datos válidos para la configuración."
+            mensaje = "Error: Datos inválidos."
     
-    # Volver a cargar los datos para reflejar los cambios
     datos = cargar_datos_desde_firebase()
-    
-    return render_template_string(CONFIG_HTML, 
-                                  familias=datos["familias"], 
-                                  config=datos["config"],
-                                  mensaje=mensaje)
+    return render_template_string(CONFIG_HTML, familias=datos["familias"], config=datos["config"], mensaje=mensaje)
 
 @app.route("/eliminar/<string:consumo_id>", methods=["POST"])
 def eliminar_consumo(consumo_id):
-    """Ruta para eliminar un registro de consumo."""
     if eliminar_consumo_en_firebase(consumo_id):
         return redirect(url_for('index', mensaje="Registro eliminado correctamente."))
     else:
@@ -416,21 +344,14 @@ def eliminar_consumo(consumo_id):
 
 @app.route("/editar/<string:consumo_id>", methods=["GET"])
 def editar_consumo(consumo_id):
-    """Ruta para mostrar el formulario de edición."""
     consumo = obtener_consumo_por_id(consumo_id)
     if not consumo:
         return redirect(url_for('index', mensaje="Registro no encontrado."))
-    
     datos = cargar_datos_desde_firebase()
-    
-    return render_template_string(EDIT_HTML,
-                                  consumo=consumo,
-                                  familias=datos["familias"],
-                                  mensaje=request.args.get('mensaje', ''))
+    return render_template_string(EDIT_HTML, consumo=consumo, familias=datos["familias"], mensaje=request.args.get('mensaje', ''))
 
 @app.route("/actualizar/<string:consumo_id>", methods=["POST"])
 def actualizar_consumo(consumo_id):
-    """Ruta para procesar la actualización del formulario."""
     datos_globales = cargar_datos_desde_firebase()
     mensaje = ""
     try:
@@ -441,41 +362,19 @@ def actualizar_consumo(consumo_id):
 
         familia_nombre = [f['nombre'] for f in datos_globales['familias'] if f['id'] == familia_id][0]
         
-        # === INICIO DE LA LÓGICA CORREGIDA PARA EDICIÓN ===
-        lectura_anterior = 0
-        try:
-            # Obtener todos los consumos para esta familia y servicio, excluyendo el actual
-            consumos_ref = db.collection(CONSUMOS_COLLECTION) \
-                             .where("familia_id", "==", familia_id) \
-                             .where("servicio", "==", servicio)
-            
-            readings_list = [doc.to_dict() for doc in consumos_ref.stream() if doc.id != consumo_id]
-            
-            # Ordenar los registros por timestamp (o fecha como respaldo) en Python
-            sorted_readings = sorted(
-                readings_list, 
-                key=lambda x: x.get('timestamp') or x.get('fecha', '0'), 
-                reverse=True
-            )
-
-            # Si hay registros anteriores, obtener la lectura del más reciente
-            if sorted_readings:
-                lectura_anterior = sorted_readings[0].get("lectura", 0)
-        
-        except Exception as e:
-            print(f"ERROR: No se pudo obtener la lectura anterior: {e}")
-        # === FIN DE LA LÓGICA CORREGIDA PARA EDICIÓN ===
+        # === USO DE LA NUEVA LÓGICA (CON EXCLUSIÓN DEL ID ACTUAL) ===
+        lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha, excluir_id=consumo_id)
+        # ============================================================
 
         consumo_valor = max(0, lectura_actual - lectura_anterior)
         
         if servicio == "Luz":
             costo_unidad = datos_globales["config"]["costo_kwh"]
             unidad = "kWh"
-        else: # "Agua"
+        else:
             costo_unidad = datos_globales["config"]["costo_m3"]
             unidad = "m³"
         
-        # Recalcular con IGV
         igv_porcentaje = datos_globales["config"]["igv_porcentaje"]
         subtotal = consumo_valor * costo_unidad
         igv_monto = subtotal * igv_porcentaje
@@ -518,9 +417,7 @@ LOGIN_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - App de Consumo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-    </style>
+    <style> body { font-family: 'Inter', sans-serif; } </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center h-screen">
     <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
@@ -538,9 +435,7 @@ LOGIN_HTML = """
                 <input type="password" id="contrasena" name="contrasena" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
             </div>
             <div class="flex items-center justify-between">
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl focus:outline-none focus:shadow-outline transition-all duration-300">
-                    Entrar
-                </button>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl focus:outline-none focus:shadow-outline transition-all duration-300">Entrar</button>
             </div>
         </form>
     </div>
@@ -558,45 +453,14 @@ INDEX_HTML = """
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
-        .tooltip-container {
-            position: relative;
-            display: inline-block;
-        }
-        .tooltip {
-            visibility: hidden;
-            width: 140px;
-            background-color: #333;
-            color: #fff;
-            text-align: center;
-            border-radius: 6px;
-            padding: 5px 0;
-            position: absolute;
-            z-index: 10;
-            bottom: 125%;
-            left: 50%;
-            margin-left: -70px;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-        .tooltip::after {
-            content: "";
-            position: absolute;
-            top: 100%;
-            left: 50%;
-            margin-left: -5px;
-            border-width: 5px;
-            border-style: solid;
-            border-color: #333 transparent transparent transparent;
-        }
-        .tooltip-container:hover .tooltip {
-            visibility: visible;
-            opacity: 1;
-        }
+        .tooltip-container { position: relative; display: inline-block; }
+        .tooltip { visibility: hidden; width: 140px; background-color: #333; color: #fff; text-align: center; border-radius: 6px; padding: 5px 0; position: absolute; z-index: 10; bottom: 125%; left: 50%; margin-left: -70px; opacity: 0; transition: opacity 0.3s; }
+        .tooltip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #333 transparent transparent transparent; }
+        .tooltip-container:hover .tooltip { visibility: visible; opacity: 1; }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
     <div class="container mx-auto">
-        <!-- Encabezado y Navegación -->
         <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
             <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
             <nav class="flex space-x-4">
@@ -606,7 +470,6 @@ INDEX_HTML = """
             </nav>
         </div>
 
-        <!-- Mensajes de la aplicación -->
         {% if mensaje %}
         <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
         {% endif %}
@@ -614,8 +477,6 @@ INDEX_HTML = """
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Lectura</h2>
             <form action="{{ url_for('index') }}" method="POST" class="space-y-6">
-
-                <!-- Select de Familia -->
                 <div>
                     <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
                     <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
@@ -624,8 +485,6 @@ INDEX_HTML = """
                         {% endfor %}
                     </select>
                 </div>
-
-                <!-- Select de Servicio -->
                 <div>
                     <label for="servicio" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
                     <select id="servicio" name="servicio" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
@@ -633,28 +492,20 @@ INDEX_HTML = """
                         <option value="Agua">Agua (m³)</option>
                     </select>
                 </div>
-
-                <!-- Campo de Fecha -->
                 <div>
                     <label for="fecha" class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
                     <input type="date" id="fecha" name="fecha" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
-
-                <!-- Campo de Lectura -->
                 <div>
                     <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
                     <input type="number" step="0.01" id="lectura" name="lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
-
                 <div class="flex justify-end">
-                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
-                        Guardar Lectura
-                    </button>
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Lectura</button>
                 </div>
             </form>
         </div>
         
-        <!-- Historial de Consumos -->
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-800">Historial de Consumos</h2>
             <div class="overflow-x-auto">
@@ -691,11 +542,9 @@ INDEX_HTML = """
                                     </span>
                                 </div>
                             </td>
-                            <!-- Botón de Editar -->
                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                 <a href="{{ url_for('editar_consumo', consumo_id=consumo.id) }}" class="text-blue-600 hover:text-blue-900">Editar</a>
                             </td>
-                            <!-- Botón de Eliminar (con formulario POST para mayor seguridad) -->
                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                 <form action="{{ url_for('eliminar_consumo', consumo_id=consumo.id) }}" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas eliminar este registro?');">
                                     <button type="submit" class="text-red-600 hover:text-red-900">Eliminar</button>
@@ -704,7 +553,7 @@ INDEX_HTML = """
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="7" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos de consumo registrados aún.</td>
+                            <td colspan="9" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos de consumo registrados aún.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -712,7 +561,6 @@ INDEX_HTML = """
             </div>
         </div>
     </div>
-    <!-- Script para establecer la fecha actual -->
     <script>
         window.addEventListener('DOMContentLoaded', (event) => {
             const today = new Date();
@@ -721,9 +569,7 @@ INDEX_HTML = """
             const day = String(today.getDate()).padStart(2, '0');
             const formattedDate = `${year}-${month}-${day}`;
             const fechaInput = document.getElementById('fecha');
-            if (fechaInput) {
-                fechaInput.value = formattedDate;
-            }
+            if (fechaInput) { fechaInput.value = formattedDate; }
         });
     </script>
 </body>
@@ -738,13 +584,10 @@ EDIT_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Editar Consumo - App de Consumo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-    </style>
+    <style> body { font-family: 'Inter', sans-serif; } </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
     <div class="container mx-auto">
-        <!-- Encabezado y Navegación -->
         <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
             <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
             <nav class="flex space-x-4">
@@ -754,7 +597,6 @@ EDIT_HTML = """
             </nav>
         </div>
         
-        <!-- Mensajes de la aplicación -->
         {% if mensaje %}
         <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
         {% endif %}
@@ -762,8 +604,6 @@ EDIT_HTML = """
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-800">Editar Consumo</h2>
             <form action="{{ url_for('actualizar_consumo', consumo_id=consumo.id) }}" method="POST" class="space-y-6">
-
-                <!-- Select de Familia -->
                 <div>
                     <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
                     <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
@@ -772,8 +612,6 @@ EDIT_HTML = """
                         {% endfor %}
                     </select>
                 </div>
-
-                <!-- Select de Servicio -->
                 <div>
                     <label for="servicio" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
                     <select id="servicio" name="servicio" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
@@ -781,26 +619,17 @@ EDIT_HTML = """
                         <option value="Agua" {% if consumo.servicio == 'Agua' %}selected{% endif %}>Agua (m³)</option>
                     </select>
                 </div>
-
-                <!-- Campo de Fecha -->
                 <div>
                     <label for="fecha" class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
                     <input type="date" id="fecha" name="fecha" value="{{ consumo.fecha }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
-
-                <!-- Campo de Lectura -->
                 <div>
                     <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
                     <input type="number" step="0.01" id="lectura" name="lectura" value="{{ consumo.lectura }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
-
                 <div class="flex justify-end space-x-4">
-                    <a href="{{ url_for('index') }}" class="inline-flex items-center px-6 py-3 border border-gray-300 text-sm font-medium rounded-xl text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300">
-                        Cancelar
-                    </a>
-                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
-                        Guardar Cambios
-                    </button>
+                    <a href="{{ url_for('index') }}" class="inline-flex items-center px-6 py-3 border border-gray-300 text-sm font-medium rounded-xl text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300">Cancelar</a>
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Cambios</button>
                 </div>
             </form>
         </div>
@@ -817,13 +646,10 @@ CONFIG_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Configuración - App de Consumo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-    </style>
+    <style> body { font-family: 'Inter', sans-serif; } </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
     <div class="container mx-auto">
-        <!-- Encabezado y Navegación -->
         <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
             <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
             <nav class="flex space-x-4">
@@ -833,7 +659,6 @@ CONFIG_HTML = """
             </nav>
         </div>
         
-        <!-- Mensajes de la aplicación -->
         {% if mensaje %}
         <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
         {% endif %}
@@ -841,7 +666,6 @@ CONFIG_HTML = """
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-800">Ajustar Configuración</h2>
             <form action="{{ url_for('configuracion') }}" method="POST" class="space-y-6">
-                <!-- Nombres de Familias -->
                 <div class="space-y-4">
                     <h3 class="text-xl font-semibold text-gray-700">Nombres de Familias</h3>
                     {% for familia in familias %}
@@ -854,7 +678,6 @@ CONFIG_HTML = """
                 
                 <hr class="my-6 border-gray-200">
 
-                <!-- Costos por Unidad -->
                 <div class="space-y-4">
                     <h3 class="text-xl font-semibold text-gray-700">Costos por Unidad (S/)</h3>
                     <div>
@@ -872,9 +695,7 @@ CONFIG_HTML = """
                 </div>
 
                 <div class="flex justify-end">
-                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
-                        Guardar Configuración
-                    </button>
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Configuración</button>
                 </div>
             </form>
         </div>
@@ -883,8 +704,6 @@ CONFIG_HTML = """
 </html>
 """
 
-
 if __name__ == '__main__':
-    # Esto es solo para pruebas locales, Vercel no lo usará
     print("DEBUG: Iniciando la aplicación Flask en modo de desarrollo.")
     app.run(debug=True)
