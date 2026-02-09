@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final: Filtros + Popup + Costos Fijos Prorrateados)
+# Código principal de la aplicación Flask (Versión Final: Filtros + Popup + Costos Fijos + Configuración Estática)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session
@@ -104,14 +104,10 @@ def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None
     return lectura_anterior
 
 # =======================================================
-# NUEVA FUNCIÓN: Lógica de Costos Fijos y Porcentajes
+# Lógica de Costos Fijos y Porcentajes
 # =======================================================
 def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
-    """
-    Calcula los montos adicionales según la familia y el servicio.
-    Retorna un diccionario con los valores calculados y el nuevo total.
-    """
-    # 1. Definir porcentaje según familia
+    """Calcula los montos adicionales según la familia y el servicio."""
     porcentaje = 0.0
     if familia_id == 'familia_1':
         porcentaje = 0.13 # 13%
@@ -123,10 +119,7 @@ def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
         "agua_alcantarillado": 0.0, "agua_cargo_fijo": 0.0
     }
     
-    total_extras = 0.0
-
     if servicio == "Luz":
-        # Capturamos el TOTAL del recibo ingresado por el usuario y calculamos el %
         raw_cargo = float(form_data.get('luz_cargo_fijo', 0) or 0)
         raw_mant = float(form_data.get('luz_mantenimiento', 0) or 0)
         raw_alum = float(form_data.get('luz_alumbrado', 0) or 0)
@@ -144,10 +137,7 @@ def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
         extras['agua_alcantarillado'] = raw_alcan * porcentaje
         extras['agua_cargo_fijo'] = raw_cargo * porcentaje
 
-    # Sumar todos los valores del diccionario extras
     total_extras = sum(extras.values())
-    
-    # El costo final es: Consumo Energía/Agua (con IGV) + Extras Prorrateados
     costo_final = subtotal_con_igv + total_extras
     
     return extras, costo_final
@@ -188,7 +178,6 @@ def index():
             fecha = request.form["fecha"]
             lectura_actual = float(request.form["lectura"])
 
-            # 1. Cálculos Base
             familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
             lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
             consumo = max(0, lectura_actual - lectura_anterior)
@@ -204,10 +193,8 @@ def index():
             igv_monto = subtotal * datos["config"]["igv_porcentaje"]
             base_con_igv = subtotal + igv_monto
 
-            # 2. Cálculos de Extras (NUEVO)
             extras_calculados, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
             
-            # 3. Construir Objeto
             nuevo_consumo = {
                 "fecha": fecha,
                 "familia_id": familia_id,
@@ -221,7 +208,7 @@ def index():
                 "igv_monto": igv_monto,
                 "costo_total": costo_total,
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                **extras_calculados # Expande el diccionario de extras aquí
+                **extras_calculados
             }
             
             if db: db.collection(CONSUMOS_COLLECTION).add(nuevo_consumo)
@@ -240,13 +227,11 @@ def configuracion():
     mensaje = ""
     if request.method == "POST" and db:
         try:
-            # Actualizar nombres familias
-            datos = cargar_datos_desde_firebase() # Cargar para tener los IDs
+            datos = cargar_datos_desde_firebase()
             for fam in datos["familias"]:
                 nuevo = request.form.get(f"familia_nombre_{fam['id']}")
                 db.collection(FAMILIAS_COLLECTION).document(fam['id']).update({"nombre": nuevo})
             
-            # Actualizar config
             db.collection(CONFIG_DOC).document(LOGIN_DOC).update({
                 "costo_kwh": float(request.form["costo_kwh"]),
                 "costo_m3": float(request.form["costo_m3"]),
@@ -277,7 +262,6 @@ def editar_consumo(cid):
 def actualizar_consumo(cid):
     if not db: return redirect(url_for('index'))
     try:
-        # Recálculo completo al editar (copia de lógica index)
         datos = cargar_datos_desde_firebase()
         familia_id = request.form["familia"]
         servicio = request.form["servicio"]
@@ -299,7 +283,6 @@ def actualizar_consumo(cid):
         igv_monto = subtotal * datos["config"]["igv_porcentaje"]
         base_con_igv = subtotal + igv_monto
 
-        # Recalcular Extras
         extras_calculados, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
 
         nuevos_datos = {
@@ -348,7 +331,7 @@ INDEX_HTML = """
                     <div><label class="block text-sm font-medium mb-1">Familia</label><select name="familia" class="w-full border rounded-lg p-2" required><option value="" disabled selected>-- Selecciona --</option>{% for f in familias %}<option value="{{ f.id }}">{{ f.nombre }}</option>{% endfor %}</select></div>
                     <div><label class="block text-sm font-medium mb-1">Servicio</label><select id="selectServicio" name="servicio" class="w-full border rounded-lg p-2" onchange="toggleCampos()" required><option value="Luz">Luz</option><option value="Agua">Agua</option></select></div>
                     <div><label class="block text-sm font-medium mb-1">Fecha</label><input type="date" id="fecha" name="fecha" class="w-full border rounded-lg p-2" required></div>
-                    <div><label class="block text-sm font-medium mb-1">Lectura</label><input type="number" step="0.01" name="lectura" placeholder="Inserte lectura aquí" class="w-full border rounded-lg p-2" required></div>
+                    <div><label class="block text-sm font-medium mb-1">Lectura</label><input type="number" step="0.01" id="lectura" name="lectura" placeholder="Inserte aquí la lectura" class="w-full border rounded-lg p-2" required></div>
                 </div>
                 
                 <div id="camposLuz" class="bg-yellow-50 p-4 rounded-xl border border-yellow-200 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -390,7 +373,6 @@ INDEX_HTML = """
                             data-subtotal="S/ {{ '%.2f'|format(c.subtotal) }}"
                             data-igv="S/ {{ '%.2f'|format(c.igv_monto) }}"
                             data-total="S/ {{ '%.2f'|format(c.costo_total) }}"
-                            
                             data-luz-cargo="S/ {{ '%.2f'|format(c.luz_cargo_fijo|default(0)) }}"
                             data-luz-mant="S/ {{ '%.2f'|format(c.luz_mantenimiento|default(0)) }}"
                             data-luz-alum="S/ {{ '%.2f'|format(c.luz_alumbrado|default(0)) }}"
@@ -456,7 +438,7 @@ INDEX_HTML = """
                 const d = new Date();
                 dateInput.value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; 
             }
-            toggleCampos(); // Iniciar estado correcto
+            toggleCampos(); 
         });
 
         function toggleCampos() {
@@ -519,7 +501,7 @@ INDEX_HTML = """
 """
 
 CONFIG_HTML = """
-<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Config</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 min-h-screen p-4 md:p-8"><div class="container mx-auto"><div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex justify-between"><h1 class="text-3xl font-bold text-gray-800">Gestor</h1><nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600">Inicio</a></nav></div>{% if mensaje %}<div class="bg-green-100 p-4 rounded mb-6">{{ mensaje }}</div>{% endif %}<div class="bg-white rounded-2xl shadow-xl p-6"><form method="POST" class="space-y-4"><h3 class="font-bold">Familias</h3>{% for f in familias %}<div><label>{{ f.nombre }}:</label><input type="text" name="familia_nombre_{{ f.id }}" value="{{ f.nombre }}" class="border rounded p-2 w-full"></div>{% endfor %}<hr><h3 class="font-bold">Costos Base</h3><div><label>Costo kWh:</label><input type="number" step="0.0001" name="costo_kwh" value="{{ config.costo_kwh }}" class="border rounded p-2 w-full"></div><div><label>Costo m3:</label><input type="number" step="0.0001" name="costo_m3" value="{{ config.costo_m3 }}" class="border rounded p-2 w-full"></div><div><label>IGV (%):</label><input type="number" step="0.01" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="border rounded p-2 w-full"></div><button class="bg-blue-600 text-white px-6 py-2 rounded">Guardar</button></form></div></div></body></html>
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Config</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 min-h-screen p-4 md:p-8"><div class="container mx-auto"><div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex justify-between"><h1 class="text-3xl font-bold text-gray-800">Gestor</h1><nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600">Inicio</a></nav></div>{% if mensaje %}<div class="bg-green-100 p-4 rounded mb-6">{{ mensaje }}</div>{% endif %}<div class="bg-white rounded-2xl shadow-xl p-6"><form method="POST" class="space-y-4"><h3 class="font-bold">Familias</h3>{% for f in familias %}<div><label>Familia {{ loop.index }}:</label><input type="text" name="familia_nombre_{{ f.id }}" value="{{ f.nombre }}" class="border rounded p-2 w-full"></div>{% endfor %}<hr><h3 class="font-bold">Costos Base</h3><div><label>Costo kWh:</label><input type="number" step="0.0001" name="costo_kwh" value="{{ config.costo_kwh }}" class="border rounded p-2 w-full"></div><div><label>Costo m3:</label><input type="number" step="0.0001" name="costo_m3" value="{{ config.costo_m3 }}" class="border rounded p-2 w-full"></div><div><label>IGV (%):</label><input type="number" step="0.01" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="border rounded p-2 w-full"></div><button class="bg-blue-600 text-white px-6 py-2 rounded">Guardar</button></form></div></div></body></html>
 """
 
 EDIT_HTML = """
