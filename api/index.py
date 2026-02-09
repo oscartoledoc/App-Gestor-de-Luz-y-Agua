@@ -38,8 +38,8 @@ except Exception as e:
 
 # Parámetros por defecto
 NUM_FAMILIAS = 5
-COSTO_KWH_DEFECTO = 0.50
-COSTO_M3_DEFECTO = 2.00
+COSTO_KWH_DEFECTO = 0.6018
+COSTO_M3_DEFECTO = 1.86
 IGV_PORCENTAJE = 0.18  # 18% IGV
 LOGIN_USER = "admin"
 LOGIN_PASS = "123"
@@ -499,6 +499,7 @@ INDEX_HTML = """
                 </div>
                 <div>
                     <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
+                    <option value="" disabled selected>-- Ingresa la lectura --</option>
                     <input type="number" step="0.01" id="lectura" name="lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
                 <div class="flex justify-end">
