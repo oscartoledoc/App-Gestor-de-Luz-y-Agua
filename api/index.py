@@ -1,9 +1,9 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final con Filtros, Lógica Temporal y Popup de Detalle)
+# Código principal de la aplicación Flask (Versión Final: Filtros + Popup + Costos Fijos Prorrateados)
 # =======================================================
 
-from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
+from flask import Flask, render_template_string, request, redirect, url_for, session
 from datetime import datetime, timedelta
 import json
 import os
@@ -11,27 +11,24 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from firebase_admin.exceptions import FirebaseError
 
-# Asegúrate de que el objeto de la app se llame 'app'
 app = Flask(__name__)
-app.secret_key = os.urandom(24) # Clave secreta para las sesiones
-app.permanent_session_lifetime = timedelta(minutes=30) # Duración de la sesión: 30 minutos
+app.secret_key = os.urandom(24)
+app.permanent_session_lifetime = timedelta(minutes=30)
 
 # =======================================================
-# Configuración y conexión a Firestore
+# Configuración Firebase
 # =======================================================
 try:
     if os.environ.get('FIREBASE_CREDENTIALS'):
         cred_json = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
         cred = credentials.Certificate(cred_json)
     else:
-        # Esto es solo para pruebas locales
         cred = credentials.Certificate("firebase-service-account.json")
     
     if not firebase_admin._apps:
         firebase_admin.initialize_app(cred)
     db = firestore.client()
     print("DEBUG: Conexión a Firebase exitosa.")
-
 except Exception as e:
     print(f"ERROR: Error al inicializar Firebase: {e}")
     db = None
@@ -40,189 +37,124 @@ except Exception as e:
 NUM_FAMILIAS = 5
 COSTO_KWH_DEFECTO = 0.6018
 COSTO_M3_DEFECTO = 1.86
-IGV_PORCENTAJE = 0.18  # 18% IGV
+IGV_PORCENTAJE = 0.18
 LOGIN_USER = "admin"
 LOGIN_PASS = "123"
 
-# Colecciones de Firestore
 FAMILIAS_COLLECTION = "familias"
 CONSUMOS_COLLECTION = "consumos"
 CONFIG_DOC = "config"
 LOGIN_DOC = "login"
 
 # =======================================================
-# Lógica de carga y guardado de datos con Firestore
+# Lógica de Datos
 # =======================================================
 def cargar_datos_desde_firebase():
-    """Carga los datos iniciales o existentes de las familias, consumos y configuración."""
-    if db is None:
-        return {
-            "familias": [{"id": f"familia_{i}", "nombre": f"Familia {i}"} for i in range(1, NUM_FAMILIAS + 1)],
-            "consumos": [],
-            "config": {"costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, "igv_porcentaje": IGV_PORCENTAJE},
-            "login": {"usuario": LOGIN_USER, "contrasena": LOGIN_PASS}
-        }
-        
+    if db is None: return {"familias": [], "consumos": [], "config": {}, "login": {}}
     try:
-        # Cargar configuración y login
         config_ref = db.collection(CONFIG_DOC).document(LOGIN_DOC)
-        config_data = config_ref.get().to_dict()
+        config_data = config_ref.get().to_dict() or {}
+        
         if not config_data:
-            config_data = {
-                "costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, 
-                "igv_porcentaje": IGV_PORCENTAJE, "usuario": LOGIN_USER, "contrasena": LOGIN_PASS
-            }
+            config_data = {"costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, "igv_porcentaje": IGV_PORCENTAJE, "usuario": LOGIN_USER, "contrasena": LOGIN_PASS}
             config_ref.set(config_data)
-        else:
-            if 'igv_porcentaje' not in config_data:
-                config_data['igv_porcentaje'] = IGV_PORCENTAJE
-                config_ref.update({'igv_porcentaje': IGV_PORCENTAJE})
 
-        # Cargar familias
         familias = []
-        familias_ref = db.collection(FAMILIAS_COLLECTION).order_by("id")
-        familias_docs = list(familias_ref.stream())
+        familias_docs = list(db.collection(FAMILIAS_COLLECTION).order_by("id").stream())
         if not familias_docs:
             for i in range(1, NUM_FAMILIAS + 1):
-                familia_id = f"familia_{i}"
-                familia_data = {"id": familia_id, "nombre": f"Familia {i}"}
-                db.collection(FAMILIAS_COLLECTION).document(familia_id).set(familia_data)
-                familias.append(familia_data)
+                fid = f"familia_{i}"
+                fdata = {"id": fid, "nombre": f"Familia {i}"}
+                db.collection(FAMILIAS_COLLECTION).document(fid).set(fdata)
+                familias.append(fdata)
         else:
-            familias = [doc.to_dict() for doc in familias_docs]
+            familias = [d.to_dict() for d in familias_docs]
 
-        # Cargar consumos
         consumos = []
-        consumos_ref = db.collection(CONSUMOS_COLLECTION)
-        consumos_docs = consumos_ref.stream()
-        
-        igv_porcentaje = config_data.get('igv_porcentaje', IGV_PORCENTAJE)
-        
-        for doc in consumos_docs:
-            consumo_data = doc.to_dict()
-            if 'servicio' not in consumo_data or 'consumo' not in consumo_data or 'lectura' not in consumo_data:
-                continue
-            consumo_data['id'] = doc.id
-            consumos.append(consumo_data)
+        for doc in db.collection(CONSUMOS_COLLECTION).stream():
+            d = doc.to_dict()
+            if 'servicio' in d:
+                d['id'] = doc.id
+                consumos.append(d)
         
         return {
-            "familias": familias,
-            "consumos": consumos,
-            "config": {
-                "costo_kwh": config_data.get("costo_kwh"),
-                "costo_m3": config_data.get("costo_m3"),
-                "igv_porcentaje": igv_porcentaje
-            },
-            "login": {
-                "usuario": config_data.get("usuario"),
-                "contrasena": config_data.get("contrasena")
-            }
+            "familias": familias, 
+            "consumos": consumos, 
+            "config": config_data, 
+            "login": config_data
         }
-    except Exception as e:
-        print(f"ERROR: Error al leer datos: {e}")
-        return {
-            "familias": [{"id": f"familia_{i}", "nombre": f"Familia {i}"} for i in range(1, NUM_FAMILIAS + 1)],
-            "consumos": [],
-            "config": {"costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, "igv_porcentaje": IGV_PORCENTAJE},
-            "login": {"usuario": LOGIN_USER, "contrasena": LOGIN_PASS}
-        }
+    except Exception:
+        return {"familias": [], "consumos": [], "config": {}, "login": {}}
 
-def guardar_consumo_en_firebase(nuevo_consumo):
-    if db is None: return False
-    try:
-        nuevo_consumo['timestamp'] = firestore.SERVER_TIMESTAMP
-        db.collection(CONSUMOS_COLLECTION).add(nuevo_consumo)
-        return True
-    except Exception as e:
-        print(f"ERROR: Error al guardar: {e}")
-        return False
-
-def actualizar_familias_y_costos(familias_data, costos_data):
-    if db is None: return False
-    try:
-        for familia in familias_data:
-            db.collection(FAMILIAS_COLLECTION).document(familia['id']).update({"nombre": familia['nombre']})
-        db.collection(CONFIG_DOC).document(LOGIN_DOC).update(costos_data)
-        return True
-    except Exception as e:
-        print(f"ERROR: Error al actualizar config: {e}")
-        return False
-
-def eliminar_consumo_en_firebase(consumo_id):
-    if db is None: return False
-    try:
-        db.collection(CONSUMOS_COLLECTION).document(consumo_id).delete()
-        return True
-    except FirebaseError:
-        return False
-
-def obtener_consumo_por_id(consumo_id):
-    if db is None: return None
-    try:
-        doc = db.collection(CONSUMOS_COLLECTION).document(consumo_id).get()
-        if doc.exists:
-            consumo = doc.to_dict()
-            consumo['id'] = doc.id
-            return consumo
-        return None
-    except FirebaseError:
-        return None
-
-def actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
-    if db is None: return False
-    try:
-        nuevos_datos['timestamp'] = firestore.SERVER_TIMESTAMP
-        db.collection(CONSUMOS_COLLECTION).document(consumo_id).update(nuevos_datos)
-        return True
-    except FirebaseError:
-        return False
-
-# =======================================================
-# FUNCIÓN CORE: CALCULAR LECTURA ANTERIOR (TIME-AWARE)
-# =======================================================
 def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None):
-    """
-    Busca la lectura más reciente que sea estrictamente ANTERIOR a la fecha_corte.
-    """
     lectura_anterior = 0
     if db is None: return 0
-
     try:
-        # 1. Traer todos los consumos de esa familia y servicio
-        consumos_ref = db.collection(CONSUMOS_COLLECTION)\
-                         .where("familia_id", "==", familia_id)\
-                         .where("servicio", "==", servicio)
-        
-        docs = consumos_ref.stream()
-        
+        consumos_ref = db.collection(CONSUMOS_COLLECTION).where("familia_id", "==", familia_id).where("servicio", "==", servicio)
         candidatos = []
-        for doc in docs:
-            # Si estamos editando, saltar el documento actual para no compararlo consigo mismo
-            if excluir_id and doc.id == excluir_id:
-                continue
-            
+        for doc in consumos_ref.stream():
+            if excluir_id and doc.id == excluir_id: continue
             data = doc.to_dict()
-            # 2. FILTRO CLAVE: Solo registros con fecha MENOR a la actual
             if data.get('fecha', '9999-99-99') < fecha_corte:
                 candidatos.append(data)
-        
-        # 3. Ordenar: El más reciente de los pasados va primero
         if candidatos:
             candidatos.sort(key=lambda x: x.get('fecha', '0'), reverse=True)
             lectura_anterior = candidatos[0].get('lectura', 0)
-            print(f"DEBUG: Lectura anterior encontrada ({candidatos[0]['fecha']}): {lectura_anterior}")
-        else:
-            print("DEBUG: No hay lecturas previas a esta fecha. Se inicia en 0.")
-
-    except Exception as e:
-        print(f"ERROR: Fallo al calcular lectura anterior: {e}")
-    
+    except Exception: pass
     return lectura_anterior
 
 # =======================================================
-# Rutas de la aplicación
+# NUEVA FUNCIÓN: Lógica de Costos Fijos y Porcentajes
 # =======================================================
+def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
+    """
+    Calcula los montos adicionales según la familia y el servicio.
+    Retorna un diccionario con los valores calculados y el nuevo total.
+    """
+    # 1. Definir porcentaje según familia
+    porcentaje = 0.0
+    if familia_id == 'familia_1':
+        porcentaje = 0.13 # 13%
+    elif familia_id == 'familia_2' or familia_id == 'familia_3':
+        porcentaje = 0.435 # 43.5%
+    
+    extras = {
+        "luz_cargo_fijo": 0.0, "luz_mantenimiento": 0.0, "luz_alumbrado": 0.0, "luz_interes": 0.0,
+        "agua_alcantarillado": 0.0, "agua_cargo_fijo": 0.0
+    }
+    
+    total_extras = 0.0
 
+    if servicio == "Luz":
+        # Capturamos el TOTAL del recibo ingresado por el usuario y calculamos el %
+        raw_cargo = float(form_data.get('luz_cargo_fijo', 0) or 0)
+        raw_mant = float(form_data.get('luz_mantenimiento', 0) or 0)
+        raw_alum = float(form_data.get('luz_alumbrado', 0) or 0)
+        raw_int = float(form_data.get('luz_interes', 0) or 0)
+
+        extras['luz_cargo_fijo'] = raw_cargo * porcentaje
+        extras['luz_mantenimiento'] = raw_mant * porcentaje
+        extras['luz_alumbrado'] = raw_alum * porcentaje
+        extras['luz_interes'] = raw_int * porcentaje
+
+    elif servicio == "Agua":
+        raw_alcan = float(form_data.get('agua_alcantarillado', 0) or 0)
+        raw_cargo = float(form_data.get('agua_cargo_fijo', 0) or 0)
+
+        extras['agua_alcantarillado'] = raw_alcan * porcentaje
+        extras['agua_cargo_fijo'] = raw_cargo * porcentaje
+
+    # Sumar todos los valores del diccionario extras
+    total_extras = sum(extras.values())
+    
+    # El costo final es: Consumo Energía/Agua (con IGV) + Extras Prorrateados
+    costo_final = subtotal_con_igv + total_extras
+    
+    return extras, costo_final
+
+# =======================================================
+# Rutas
+# =======================================================
 @app.before_request
 def verificar_login():
     if 'usuario' not in session and request.endpoint not in ['login', 'static']:
@@ -231,16 +163,12 @@ def verificar_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        usuario = request.form.get("usuario")
-        contrasena = request.form.get("contrasena")
         datos = cargar_datos_desde_firebase()
-        
-        if usuario == datos["login"]["usuario"] and contrasena == datos["login"]["contrasena"]:
-            session.permanent = True # Activa los 30 minutos
-            session['usuario'] = usuario
+        if request.form.get("usuario") == datos["login"]["usuario"] and request.form.get("contrasena") == datos["login"]["contrasena"]:
+            session.permanent = True
+            session['usuario'] = request.form.get("usuario")
             return redirect(url_for('index'))
-        else:
-            return render_template_string(LOGIN_HTML, error="Usuario o contraseña incorrectos.")
+        return render_template_string(LOGIN_HTML, error="Credenciales incorrectas")
     return render_template_string(LOGIN_HTML)
 
 @app.route("/logout")
@@ -259,16 +187,105 @@ def index():
             servicio = request.form["servicio"]
             fecha = request.form["fecha"]
             lectura_actual = float(request.form["lectura"])
-        except (ValueError, KeyError):
-            mensaje = "Error: Por favor, introduce datos válidos."
-            return render_template_string(INDEX_HTML, familias=datos["familias"], historial=datos["consumos"], config=datos["config"], mensaje=mensaje)
 
-        familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
+            # 1. Cálculos Base
+            familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
+            lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
+            consumo = max(0, lectura_actual - lectura_anterior)
+            
+            if servicio == "Luz":
+                costo_unidad = datos["config"]["costo_kwh"]
+                unidad = "kWh"
+            else:
+                costo_unidad = datos["config"]["costo_m3"]
+                unidad = "m³"
+
+            subtotal = consumo * costo_unidad
+            igv_monto = subtotal * datos["config"]["igv_porcentaje"]
+            base_con_igv = subtotal + igv_monto
+
+            # 2. Cálculos de Extras (NUEVO)
+            extras_calculados, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
+            
+            # 3. Construir Objeto
+            nuevo_consumo = {
+                "fecha": fecha,
+                "familia_id": familia_id,
+                "familia_nombre": familia_nombre,
+                "servicio": servicio,
+                "lectura": lectura_actual,
+                "lectura_anterior": lectura_anterior,
+                "consumo": consumo,
+                "unidad": unidad,
+                "subtotal": subtotal,
+                "igv_monto": igv_monto,
+                "costo_total": costo_total,
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                **extras_calculados # Expande el diccionario de extras aquí
+            }
+            
+            if db: db.collection(CONSUMOS_COLLECTION).add(nuevo_consumo)
+            mensaje = "Datos guardados correctamente."
+        except Exception as e:
+            mensaje = f"Error: {e}"
+            print(e)
         
-        # === USO DE LA NUEVA LÓGICA ===
-        lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
-        # ==============================
+        return redirect(url_for('index', mensaje=mensaje))
+    
+    historial = sorted(datos["consumos"], key=lambda x: x.get("timestamp") or x.get("fecha", '0'), reverse=True)
+    return render_template_string(INDEX_HTML, familias=datos["familias"], historial=historial, config=datos["config"], mensaje=request.args.get('mensaje', ''))
 
+@app.route("/configuracion", methods=["GET", "POST"])
+def configuracion():
+    mensaje = ""
+    if request.method == "POST" and db:
+        try:
+            # Actualizar nombres familias
+            datos = cargar_datos_desde_firebase() # Cargar para tener los IDs
+            for fam in datos["familias"]:
+                nuevo = request.form.get(f"familia_nombre_{fam['id']}")
+                db.collection(FAMILIAS_COLLECTION).document(fam['id']).update({"nombre": nuevo})
+            
+            # Actualizar config
+            db.collection(CONFIG_DOC).document(LOGIN_DOC).update({
+                "costo_kwh": float(request.form["costo_kwh"]),
+                "costo_m3": float(request.form["costo_m3"]),
+                "igv_porcentaje": float(request.form["igv_porcentaje"])
+            })
+            mensaje = "Configuración guardada."
+        except Exception: mensaje = "Error al guardar."
+    
+    datos = cargar_datos_desde_firebase()
+    return render_template_string(CONFIG_HTML, familias=datos["familias"], config=datos["config"], mensaje=mensaje)
+
+@app.route("/eliminar/<string:cid>", methods=["POST"])
+def eliminar_consumo(cid):
+    if db: db.collection(CONSUMOS_COLLECTION).document(cid).delete()
+    return redirect(url_for('index', mensaje="Eliminado."))
+
+@app.route("/editar/<string:cid>", methods=["GET"])
+def editar_consumo(cid):
+    if not db: return redirect(url_for('index'))
+    doc = db.collection(CONSUMOS_COLLECTION).document(cid).get()
+    if not doc.exists: return redirect(url_for('index'))
+    datos = cargar_datos_desde_firebase()
+    consumo = doc.to_dict()
+    consumo['id'] = cid
+    return render_template_string(EDIT_HTML, consumo=consumo, familias=datos["familias"])
+
+@app.route("/actualizar/<string:cid>", methods=["POST"])
+def actualizar_consumo(cid):
+    if not db: return redirect(url_for('index'))
+    try:
+        # Recálculo completo al editar (copia de lógica index)
+        datos = cargar_datos_desde_firebase()
+        familia_id = request.form["familia"]
+        servicio = request.form["servicio"]
+        fecha = request.form["fecha"]
+        lectura_actual = float(request.form["lectura"])
+        
+        familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
+        lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha, excluir_id=cid)
         consumo = max(0, lectura_actual - lectura_anterior)
         
         if servicio == "Luz":
@@ -279,168 +296,31 @@ def index():
             unidad = "m³"
 
         subtotal = consumo * costo_unidad
-        igv_porcentaje = datos["config"]["igv_porcentaje"]
-        igv_monto = subtotal * igv_porcentaje
-        costo_total = subtotal + igv_monto
-        
-        nuevo_consumo = {
-            "fecha": fecha,
-            "familia_id": familia_id,
-            "familia_nombre": familia_nombre,
-            "servicio": servicio,
-            "lectura": lectura_actual,
-            "lectura_anterior": lectura_anterior,
-            "consumo": consumo,
-            "unidad": unidad,
-            "subtotal": subtotal,
-            "igv_monto": igv_monto,
-            "costo_total": costo_total
-        }
-        
-        if guardar_consumo_en_firebase(nuevo_consumo):
-            mensaje = "Datos guardados correctamente."
-        else:
-            mensaje = "Error al guardar los datos."
-        
-        return redirect(url_for('index', mensaje=mensaje))
-    
-    historial = sorted(datos["consumos"], key=lambda x: x.get("timestamp") or x.get("fecha", '0'), reverse=True)
-    return render_template_string(INDEX_HTML, familias=datos["familias"], historial=historial, config=datos["config"], mensaje=request.args.get('mensaje', ''))
+        igv_monto = subtotal * datos["config"]["igv_porcentaje"]
+        base_con_igv = subtotal + igv_monto
 
+        # Recalcular Extras
+        extras_calculados, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
 
-@app.route("/configuracion", methods=["GET", "POST"])
-def configuracion():
-    datos = cargar_datos_desde_firebase()
-    mensaje = ""
-    if request.method == "POST":
-        try:
-            familias_actualizadas = []
-            for familia in datos["familias"]:
-                nuevo_nombre = request.form.get(f"familia_nombre_{familia['id']}")
-                familias_actualizadas.append({"id": familia['id'], "nombre": nuevo_nombre})
-            
-            costos_actualizados = {
-                "costo_kwh": float(request.form["costo_kwh"]),
-                "costo_m3": float(request.form["costo_m3"]),
-                "igv_porcentaje": float(request.form["igv_porcentaje"])
-            }
-            
-            if actualizar_familias_y_costos(familias_actualizadas, costos_actualizados):
-                mensaje = "Configuración guardada correctamente."
-            else:
-                mensaje = "Error al guardar la configuración."
-        except (ValueError, KeyError):
-            mensaje = "Error: Datos inválidos."
-    
-    datos = cargar_datos_desde_firebase()
-    return render_template_string(CONFIG_HTML, familias=datos["familias"], config=datos["config"], mensaje=mensaje)
-
-@app.route("/eliminar/<string:consumo_id>", methods=["POST"])
-def eliminar_consumo(consumo_id):
-    if eliminar_consumo_en_firebase(consumo_id):
-        return redirect(url_for('index', mensaje="Registro eliminado correctamente."))
-    else:
-        return redirect(url_for('index', mensaje="Error al eliminar el registro."))
-
-@app.route("/editar/<string:consumo_id>", methods=["GET"])
-def editar_consumo(consumo_id):
-    consumo = obtener_consumo_por_id(consumo_id)
-    if not consumo:
-        return redirect(url_for('index', mensaje="Registro no encontrado."))
-    datos = cargar_datos_desde_firebase()
-    return render_template_string(EDIT_HTML, consumo=consumo, familias=datos["familias"], mensaje=request.args.get('mensaje', ''))
-
-@app.route("/actualizar/<string:consumo_id>", methods=["POST"])
-def actualizar_consumo(consumo_id):
-    datos_globales = cargar_datos_desde_firebase()
-    mensaje = ""
-    try:
-        familia_id = request.form["familia"]
-        servicio = request.form["servicio"]
-        fecha = request.form["fecha"]
-        lectura_actual = float(request.form["lectura"])
-
-        familia_nombre = [f['nombre'] for f in datos_globales['familias'] if f['id'] == familia_id][0]
-        
-        # === USO DE LA NUEVA LÓGICA (CON EXCLUSIÓN DEL ID ACTUAL) ===
-        lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha, excluir_id=consumo_id)
-        # ============================================================
-
-        consumo_valor = max(0, lectura_actual - lectura_anterior)
-        
-        if servicio == "Luz":
-            costo_unidad = datos_globales["config"]["costo_kwh"]
-            unidad = "kWh"
-        else:
-            costo_unidad = datos_globales["config"]["costo_m3"]
-            unidad = "m³"
-        
-        igv_porcentaje = datos_globales["config"]["igv_porcentaje"]
-        subtotal = consumo_valor * costo_unidad
-        igv_monto = subtotal * igv_porcentaje
-        costo_total = subtotal + igv_monto
-        
         nuevos_datos = {
-            "fecha": fecha,
-            "familia_id": familia_id,
-            "familia_nombre": familia_nombre,
-            "servicio": servicio,
-            "lectura": lectura_actual,
-            "lectura_anterior": lectura_anterior,
-            "consumo": consumo_valor,
-            "unidad": unidad,
-            "subtotal": subtotal,
-            "igv_monto": igv_monto,
-            "costo_total": costo_total
+            "fecha": fecha, "familia_id": familia_id, "familia_nombre": familia_nombre,
+            "servicio": servicio, "lectura": lectura_actual, "lectura_anterior": lectura_anterior,
+            "consumo": consumo, "unidad": unidad, "subtotal": subtotal, "igv_monto": igv_monto,
+            "costo_total": costo_total, "timestamp": firestore.SERVER_TIMESTAMP,
+            **extras_calculados
         }
-        
-        if actualizar_consumo_en_firebase(consumo_id, nuevos_datos):
-            mensaje = "Registro actualizado correctamente."
-        else:
-            mensaje = "Error al actualizar el registro."
-    
-    except (ValueError, KeyError):
-        mensaje = "Error: Por favor, introduce datos válidos."
-
+        db.collection(CONSUMOS_COLLECTION).document(cid).update(nuevos_datos)
+        mensaje = "Actualizado."
+    except Exception: mensaje = "Error al actualizar."
     return redirect(url_for('index', mensaje=mensaje))
 
-
 # =======================================================
-# HTML de la aplicación (plantillas)
+# HTML Templates (Frontend)
 # =======================================================
 
 LOGIN_HTML = """
 <!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - App de Consumo</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style> body { font-family: 'Inter', sans-serif; } </style>
-</head>
-<body class="bg-gray-100 flex items-center justify-center h-screen">
-    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-        <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">Iniciar Sesión</h2>
-        {% if error %}
-        <p class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-xl">{{ error }}</p>
-        {% endif %}
-        <form action="{{ url_for('login') }}" method="POST">
-            <div class="mb-4">
-                <label for="usuario" class="block text-gray-700 text-sm font-semibold mb-2">Usuario</label>
-                <input type="text" id="usuario" name="usuario" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
-            </div>
-            <div class="mb-6">
-                <label for="contrasena" class="block text-gray-700 text-sm font-semibold mb-2">Contraseña</label>
-                <input type="password" id="contrasena" name="contrasena" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
-            </div>
-            <div class="flex items-center justify-between">
-                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl focus:outline-none focus:shadow-outline transition-all duration-300">Entrar</button>
-            </div>
-        </form>
-    </div>
-</body>
-</html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 flex items-center justify-center h-screen"><div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md"><h2 class="text-3xl font-bold text-center mb-6">Iniciar Sesión</h2>{% if error %}<p class="bg-red-100 text-red-700 p-3 mb-4 rounded">{{ error }}</p>{% endif %}<form method="POST"><div class="mb-4"><label class="block text-gray-700 text-sm font-bold mb-2">Usuario</label><input type="text" name="usuario" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required></div><div class="mb-6"><label class="block text-gray-700 text-sm font-bold mb-2">Contraseña</label><input type="password" name="contrasena" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline" required></div><button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full">Entrar</button></form></div></body></html>
 """
 
 INDEX_HTML = """
@@ -449,360 +329,206 @@ INDEX_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>App de Consumo</title>
+    <title>Gestor de Consumos</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-        .tooltip-container { position: relative; display: inline-block; }
-        .tooltip { visibility: hidden; width: 140px; background-color: #333; color: #fff; text-align: center; border-radius: 6px; padding: 5px 0; position: absolute; z-index: 10; bottom: 125%; left: 50%; margin-left: -70px; opacity: 0; transition: opacity 0.3s; }
-        .tooltip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #333 transparent transparent transparent; }
-        .tooltip-container:hover .tooltip { visibility: visible; opacity: 1; }
-    </style>
+    <style>.tooltip-container {position: relative;display: inline-block;}.tooltip {visibility: hidden;width: 140px;background-color: #333;color: #fff;text-align: center;border-radius: 6px;padding: 5px 0;position: absolute;z-index: 10;bottom: 125%;left: 50%;margin-left: -70px;opacity: 0;transition: opacity 0.3s;}.tooltip-container:hover .tooltip {visibility: visible;opacity: 1;}</style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
     <div class="container mx-auto">
         <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
-            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
-            <nav class="flex space-x-4">
-                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
-                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
-                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
-            </nav>
+            <h1 class="text-3xl font-bold text-gray-800">Gestor de Consumos</h1>
+            <nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600 font-bold">Inicio</a><a href="{{ url_for('configuracion') }}" class="text-gray-600 hover:text-blue-600">Configuración</a><a href="{{ url_for('logout') }}" class="text-red-600 hover:text-red-800">Salir</a></nav>
         </div>
+        {% if mensaje %}<div class="bg-green-100 text-green-700 p-4 rounded-xl mb-6">{{ mensaje }}</div>{% endif %}
 
-        {% if mensaje %}
-        <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
-        {% endif %}
+        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8">
+            <h2 class="text-2xl font-bold mb-4">Ingresar Lectura</h2>
+            <form action="{{ url_for('index') }}" method="POST" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div><label class="block text-sm font-medium mb-1">Familia</label><select name="familia" class="w-full border rounded-lg p-2" required><option value="" disabled selected>-- Selecciona --</option>{% for f in familias %}<option value="{{ f.id }}">{{ f.nombre }}</option>{% endfor %}</select></div>
+                    <div><label class="block text-sm font-medium mb-1">Servicio</label><select id="selectServicio" name="servicio" class="w-full border rounded-lg p-2" onchange="toggleCampos()" required><option value="Luz">Luz</option><option value="Agua">Agua</option></select></div>
+                    <div><label class="block text-sm font-medium mb-1">Fecha</label><input type="date" id="fecha" name="fecha" class="w-full border rounded-lg p-2" required></div>
+                    <div><label class="block text-sm font-medium mb-1">Lectura</label><input type="number" step="0.01" name="lectura" placeholder="Inserte lectura aquí" class="w-full border rounded-lg p-2" required></div>
+                </div>
+                
+                <div id="camposLuz" class="bg-yellow-50 p-4 rounded-xl border border-yellow-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="col-span-full font-bold text-yellow-800">Costos Fijos Luz (Ingresar Total del Recibo):</div>
+                    <div><label class="text-xs">Cargo Fijo</label><input type="number" step="0.01" name="luz_cargo_fijo" class="w-full border rounded p-1"></div>
+                    <div><label class="text-xs">Mant. y Reposición</label><input type="number" step="0.01" name="luz_mantenimiento" class="w-full border rounded p-1"></div>
+                    <div><label class="text-xs">Alumbrado Público</label><input type="number" step="0.01" name="luz_alumbrado" class="w-full border rounded p-1"></div>
+                    <div><label class="text-xs">Interés Compensatorio</label><input type="number" step="0.01" name="luz_interes" class="w-full border rounded p-1"></div>
+                </div>
 
-        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
-            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Lectura</h2>
-            <form action="{{ url_for('index') }}" method="POST" class="space-y-6">
-                <div>
-                    <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
-                    <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200" required>
-                        <option value="" disabled selected>-- Selecciona una familia --</option>
-                        {% for familia in familias %}
-                        <option value="{{ familia.id }}">{{ familia.nombre }}</option>
-                        {% endfor %}
-                    </select>
+                <div id="camposAgua" class="hidden bg-blue-50 p-4 rounded-xl border border-blue-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="col-span-full font-bold text-blue-800">Costos Fijos Agua (Ingresar Total del Recibo):</div>
+                    <div><label class="text-xs">Servicio Alcantarillado</label><input type="number" step="0.01" name="agua_alcantarillado" class="w-full border rounded p-1"></div>
+                    <div><label class="text-xs">Cargo Fijo</label><input type="number" step="0.01" name="agua_cargo_fijo" class="w-full border rounded p-1"></div>
                 </div>
-                <div>
-                    <label for="servicio" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
-                    <select id="servicio" name="servicio" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
-                        <option value="Luz">Luz (kWh)</option>
-                        <option value="Agua">Agua (m³)</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="fecha" class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
-                    <input type="date" id="fecha" name="fecha" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
-                </div>
-                <div>
-                    <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
-                    <input type="number" step="0.01" id="lectura" name="lectura" placeholder="Inserte aquí la lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
-                </div>
-                <div class="flex justify-end">
-                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Lectura</button>
-                </div>
+
+                <div class="flex justify-end"><button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Guardar</button></div>
             </form>
         </div>
-        
-        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
-            <div class="flex flex-col md:flex-row justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-4 md:mb-0">Historial de Consumos</h2>
-                
-                <div class="flex flex-col md:flex-row gap-4 w-full md:w-auto">
-                    <select id="filtroFamilia" onchange="aplicarFiltros()" class="border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-xl shadow-sm text-sm py-2 px-3">
-                        <option value="">Todas las Familias</option>
-                        {% for familia in familias %}
-                        <option value="{{ familia.nombre }}">{{ familia.nombre }}</option>
-                        {% endfor %}
-                    </select>
-                    <select id="filtroServicio" onchange="aplicarFiltros()" class="border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-xl shadow-sm text-sm py-2 px-3">
-                        <option value="">Todos los Servicios</option>
-                        <option value="Luz">Luz</option>
-                        <option value="Agua">Agua</option>
-                    </select>
+
+        <div class="bg-white rounded-2xl shadow-xl p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold">Historial</h2>
+                <div class="flex gap-2">
+                    <select id="filtroFamilia" onchange="aplicarFiltros()" class="border rounded p-1 text-sm"><option value="">Todas</option>{% for f in familias %}<option value="{{ f.nombre }}">{{ f.nombre }}</option>{% endfor %}</select>
+                    <select id="filtroServicio" onchange="aplicarFiltros()" class="border rounded p-1 text-sm"><option value="">Todos</option><option value="Luz">Luz</option><option value="Agua">Agua</option></select>
                 </div>
             </div>
-
             <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 rounded-xl">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Familia</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Servicio</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lectura Anterior</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lectura Actual</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Consumo</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Costo Total</th>
-                            <th scope="col" class="relative px-6 py-3"><span class="sr-only">Editar</span></th>
-                            <th scope="col" class="relative px-6 py-3"><span class="sr-only">Eliminar</span></th>
-                        </tr>
-                    </thead>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50"><tr><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Fecha</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Familia</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Servicio</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Lec. Ant</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Lec. Act</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Consumo</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Total</th><th class="px-4 py-2"></th><th class="px-4 py-2"></th></tr></thead>
                     <tbody class="bg-white divide-y divide-gray-200">
-                        {% for consumo in historial %}
-                        <tr class="hover:bg-gray-100 transition-colors duration-100 fila-dato cursor-pointer" 
-                            onclick="abrirModal(this)"
-                            data-fecha="{{ consumo.fecha }}"
-                            data-familia="{{ consumo.familia_nombre }}"
-                            data-servicio="{{ consumo.servicio }}"
-                            data-lectura-ant="{{ '%.2f'|format(consumo.lectura_anterior) }} {{ consumo.unidad }}"
-                            data-lectura-act="{{ '%.2f'|format(consumo.lectura) }} {{ consumo.unidad }}"
-                            data-consumo="{{ '%.2f'|format(consumo.consumo) }} {{ consumo.unidad }}"
-                            data-subtotal="S/ {{ '%.2f'|format(consumo.subtotal) }}"
-                            data-igv="S/ {{ '%.2f'|format(consumo.igv_monto) }}"
-                            data-total="S/ {{ '%.2f'|format(consumo.costo_total) }}">
+                        {% for c in historial %}
+                        <tr class="hover:bg-gray-100 cursor-pointer fila-dato" onclick="abrirModal(this)"
+                            data-fecha="{{ c.fecha }}" data-familia="{{ c.familia_nombre }}" data-servicio="{{ c.servicio }}"
+                            data-lectura-ant="{{ '%.2f'|format(c.lectura_anterior) }} {{ c.unidad }}"
+                            data-lectura-act="{{ '%.2f'|format(c.lectura) }} {{ c.unidad }}"
+                            data-consumo="{{ '%.2f'|format(c.consumo) }} {{ c.unidad }}"
+                            data-subtotal="S/ {{ '%.2f'|format(c.subtotal) }}"
+                            data-igv="S/ {{ '%.2f'|format(c.igv_monto) }}"
+                            data-total="S/ {{ '%.2f'|format(c.costo_total) }}"
                             
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ consumo.fecha }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-familia">{{ consumo.familia_nombre }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-servicio">{{ consumo.servicio }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura_anterior) }} {{ consumo.unidad }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura) }} {{ consumo.unidad }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                S/ {{ "%.2f"|format(consumo.costo_total) }}
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <a href="{{ url_for('editar_consumo', consumo_id=consumo.id) }}" class="text-blue-600 hover:text-blue-900" onclick="event.stopPropagation()">Editar</a>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <form action="{{ url_for('eliminar_consumo', consumo_id=consumo.id) }}" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas eliminar este registro?');" onclick="event.stopPropagation()">
-                                    <button type="submit" class="text-red-600 hover:text-red-900">Eliminar</button>
-                                </form>
-                            </td>
+                            data-luz-cargo="S/ {{ '%.2f'|format(c.luz_cargo_fijo|default(0)) }}"
+                            data-luz-mant="S/ {{ '%.2f'|format(c.luz_mantenimiento|default(0)) }}"
+                            data-luz-alum="S/ {{ '%.2f'|format(c.luz_alumbrado|default(0)) }}"
+                            data-luz-int="S/ {{ '%.2f'|format(c.luz_interes|default(0)) }}"
+                            data-agua-alcan="S/ {{ '%.2f'|format(c.agua_alcantarillado|default(0)) }}"
+                            data-agua-cargo="S/ {{ '%.2f'|format(c.agua_cargo_fijo|default(0)) }}"
+                        >
+                            <td class="px-4 py-2 text-sm">{{ c.fecha }}</td>
+                            <td class="px-4 py-2 text-sm celda-familia">{{ c.familia_nombre }}</td>
+                            <td class="px-4 py-2 text-sm celda-servicio">{{ c.servicio }}</td>
+                            <td class="px-4 py-2 text-sm">{{ "%.2f"|format(c.lectura_anterior) }}</td>
+                            <td class="px-4 py-2 text-sm">{{ "%.2f"|format(c.lectura) }}</td>
+                            <td class="px-4 py-2 text-sm">{{ "%.2f"|format(c.consumo) }}</td>
+                            <td class="px-4 py-2 text-sm font-bold text-green-600">S/ {{ "%.2f"|format(c.costo_total) }}</td>
+                            <td class="px-4 py-2 text-right"><a href="{{ url_for('editar_consumo', cid=c.id) }}" class="text-blue-600 text-sm" onclick="event.stopPropagation()">Editar</a></td>
+                            <td class="px-4 py-2 text-right"><form action="{{ url_for('eliminar_consumo', cid=c.id) }}" method="POST" onsubmit="return confirm('¿Borrar?');" onclick="event.stopPropagation()"><button class="text-red-600 text-sm">X</button></form></td>
                         </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="9" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos de consumo registrados aún.</td>
-                        </tr>
-                        {% endfor %}
+                        {% else %}<tr><td colspan="9" class="p-4 text-center text-gray-500">Sin datos</td></tr>{% endfor %}
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
 
-    <div id="modalDetalle" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50 flex items-center justify-center">
-        <div class="relative p-5 border w-96 shadow-lg rounded-2xl bg-white">
-            <div class="mt-3 text-center">
-                <h3 class="text-2xl leading-6 font-bold text-gray-900 mb-4" id="modalTitulo">Detalle de Consumo</h3>
-                <div class="mt-2 text-left space-y-3 px-4">
-                    <p class="text-sm text-gray-500"><strong>Fecha:</strong> <span id="mFecha"></span></p>
-                    <p class="text-sm text-gray-500"><strong>Familia:</strong> <span id="mFamilia"></span></p>
-                    <p class="text-sm text-gray-500"><strong>Servicio:</strong> <span id="mServicio"></span></p>
-                    <hr>
-                    <p class="text-sm text-gray-500"><strong>Lectura Anterior:</strong> <span id="mLecturaAnt"></span></p>
-                    <p class="text-sm text-gray-500"><strong>Lectura Actual:</strong> <span id="mLecturaAct"></span></p>
-                    <p class="text-sm text-gray-500 font-semibold"><strong>Consumo:</strong> <span id="mConsumo" class="text-blue-600"></span></p>
-                    <hr>
-                    <p class="text-sm text-gray-500"><strong>Subtotal:</strong> <span id="mSubtotal"></span></p>
-                    <p class="text-sm text-gray-500"><strong>IGV (18%):</strong> <span id="mIgv"></span></p>
-                    <p class="text-lg text-gray-800 font-bold mt-2"><strong>Total:</strong> <span id="mTotal" class="text-green-600"></span></p>
+    <div id="modalDetalle" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-2xl shadow-lg w-96 relative">
+            <h3 class="text-xl font-bold mb-4 text-center">Detalle de Consumo</h3>
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between"><span class="text-gray-500">Familia:</span><span id="mFamilia" class="font-bold"></span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Servicio:</span><span id="mServicio"></span></div>
+                <div class="flex justify-between"><span class="text-gray-500">Fecha:</span><span id="mFecha"></span></div>
+                <hr>
+                <div class="flex justify-between"><span>Lectura Ant:</span><span id="mLecturaAnt"></span></div>
+                <div class="flex justify-between"><span>Lectura Act:</span><span id="mLecturaAct"></span></div>
+                <div class="flex justify-between font-bold"><span>Consumo:</span><span id="mConsumo" class="text-blue-600"></span></div>
+                <hr>
+                <div class="flex justify-between"><span>Subtotal Energía/Agua:</span><span id="mSubtotal"></span></div>
+                <div class="flex justify-between"><span>IGV:</span><span id="mIgv"></span></div>
+                
+                <div id="extrasLuz" class="hidden bg-yellow-50 p-2 rounded text-xs mt-2 space-y-1">
+                    <div class="font-bold text-yellow-800">Cargos Fijos (Prorrateado):</div>
+                    <div class="flex justify-between"><span>Cargo Fijo:</span><span id="mLuzCargo"></span></div>
+                    <div class="flex justify-between"><span>Mantenimiento:</span><span id="mLuzMant"></span></div>
+                    <div class="flex justify-between"><span>Alumbrado:</span><span id="mLuzAlum"></span></div>
+                    <div class="flex justify-between"><span>Interés:</span><span id="mLuzInt"></span></div>
                 </div>
-                <div class="items-center px-4 py-3 mt-4">
-                    <button id="ok-btn" onclick="cerrarModal()" class="px-4 py-2 bg-blue-600 text-white text-base font-medium rounded-xl w-full shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300">
-                        Cerrar
-                    </button>
+                <div id="extrasAgua" class="hidden bg-blue-50 p-2 rounded text-xs mt-2 space-y-1">
+                    <div class="font-bold text-blue-800">Cargos Fijos (Prorrateado):</div>
+                    <div class="flex justify-between"><span>Alcantarillado:</span><span id="mAguaAlcan"></span></div>
+                    <div class="flex justify-between"><span>Cargo Fijo:</span><span id="mAguaCargo"></span></div>
                 </div>
+
+                <div class="flex justify-between text-lg font-bold mt-4 pt-2 border-t"><span>Total a Pagar:</span><span id="mTotal" class="text-green-600"></span></div>
             </div>
+            <button onclick="document.getElementById('modalDetalle').classList.add('hidden')" class="mt-6 w-full bg-blue-600 text-white py-2 rounded-xl">Cerrar</button>
         </div>
     </div>
 
     <script>
-        window.addEventListener('DOMContentLoaded', (event) => {
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = String(today.getMonth() + 1).padStart(2, '0');
-            const day = String(today.getDate()).padStart(2, '0');
-            const formattedDate = `${year}-${month}-${day}`;
-            const fechaInput = document.getElementById('fecha');
-            if (fechaInput) { fechaInput.value = formattedDate; }
+        window.addEventListener('DOMContentLoaded', () => {
+            const dateInput = document.getElementById('fecha');
+            if(dateInput) { 
+                const d = new Date();
+                dateInput.value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; 
+            }
+            toggleCampos(); // Iniciar estado correcto
         });
 
-        // === LÓGICA DE FILTRADO JS ===
+        function toggleCampos() {
+            const servicio = document.getElementById('selectServicio').value;
+            const luzDiv = document.getElementById('camposLuz');
+            const aguaDiv = document.getElementById('camposAgua');
+            if (servicio === 'Luz') {
+                luzDiv.classList.remove('hidden');
+                aguaDiv.classList.add('hidden');
+            } else {
+                luzDiv.classList.add('hidden');
+                aguaDiv.classList.remove('hidden');
+            }
+        }
+
         function aplicarFiltros() {
-            const filtroFamilia = document.getElementById('filtroFamilia').value.toLowerCase();
-            const filtroServicio = document.getElementById('filtroServicio').value.toLowerCase();
-            const filas = document.querySelectorAll('.fila-dato');
-
-            filas.forEach(fila => {
-                const textoFamilia = fila.querySelector('.celda-familia').textContent.toLowerCase();
-                const textoServicio = fila.querySelector('.celda-servicio').textContent.toLowerCase();
-
-                const coincideFamilia = filtroFamilia === "" || textoFamilia.includes(filtroFamilia);
-                const coincideServicio = filtroServicio === "" || textoServicio.includes(filtroServicio);
-
-                if (coincideFamilia && coincideServicio) {
-                    fila.style.display = '';
-                } else {
-                    fila.style.display = 'none';
-                }
+            const fFam = document.getElementById('filtroFamilia').value.toLowerCase();
+            const fServ = document.getElementById('filtroServicio').value.toLowerCase();
+            document.querySelectorAll('.fila-dato').forEach(row => {
+                const txtFam = row.querySelector('.celda-familia').textContent.toLowerCase();
+                const txtServ = row.querySelector('.celda-servicio').textContent.toLowerCase();
+                row.style.display = (txtFam.includes(fFam) && txtServ.includes(fServ)) ? '' : 'none';
             });
         }
 
-        // === LÓGICA DEL MODAL POPUP ===
-        function abrirModal(fila) {
-            // Leer datos del dataset de la fila
-            document.getElementById('mFecha').textContent = fila.dataset.fecha;
-            document.getElementById('mFamilia').textContent = fila.dataset.familia;
-            document.getElementById('mServicio').textContent = fila.dataset.servicio;
-            document.getElementById('mLecturaAnt').textContent = fila.dataset.lecturaAnt;
-            document.getElementById('mLecturaAct').textContent = fila.dataset.lecturaAct;
-            document.getElementById('mConsumo').textContent = fila.dataset.consumo;
-            document.getElementById('mSubtotal').textContent = fila.dataset.subtotal;
-            document.getElementById('mIgv').textContent = fila.dataset.igv;
-            document.getElementById('mTotal').textContent = fila.dataset.total;
+        function abrirModal(row) {
+            const ds = row.dataset;
+            document.getElementById('mFecha').textContent = ds.fecha;
+            document.getElementById('mFamilia').textContent = ds.familia;
+            document.getElementById('mServicio').textContent = ds.servicio;
+            document.getElementById('mLecturaAnt').textContent = ds.lecturaAnt;
+            document.getElementById('mLecturaAct').textContent = ds.lecturaAct;
+            document.getElementById('mConsumo').textContent = ds.consumo;
+            document.getElementById('mSubtotal').textContent = ds.subtotal;
+            document.getElementById('mIgv').textContent = ds.igv;
+            document.getElementById('mTotal').textContent = ds.total;
 
-            // Mostrar el modal
-            document.getElementById('modalDetalle').classList.remove('hidden');
-        }
+            const boxLuz = document.getElementById('extrasLuz');
+            const boxAgua = document.getElementById('extrasAgua');
 
-        function cerrarModal() {
-            document.getElementById('modalDetalle').classList.add('hidden');
-        }
-        
-        // Cerrar modal si se hace clic fuera del contenido
-        window.onclick = function(event) {
-            const modal = document.getElementById('modalDetalle');
-            if (event.target == modal) {
-                cerrarModal();
+            if(ds.servicio === 'Luz') {
+                boxLuz.classList.remove('hidden');
+                boxAgua.classList.add('hidden');
+                document.getElementById('mLuzCargo').textContent = ds.luzCargo;
+                document.getElementById('mLuzMant').textContent = ds.luzMant;
+                document.getElementById('mLuzAlum').textContent = ds.luzAlum;
+                document.getElementById('mLuzInt').textContent = ds.luzInt;
+            } else {
+                boxLuz.classList.add('hidden');
+                boxAgua.classList.remove('hidden');
+                document.getElementById('mAguaAlcan').textContent = ds.aguaAlcan;
+                document.getElementById('mAguaCargo').textContent = ds.aguaCargo;
             }
+
+            document.getElementById('modalDetalle').classList.remove('hidden');
         }
     </script>
 </body>
 </html>
 """
 
-EDIT_HTML = """
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Editar Consumo - App de Consumo</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style> body { font-family: 'Inter', sans-serif; } </style>
-</head>
-<body class="bg-gray-100 min-h-screen p-4 md:p-8">
-    <div class="container mx-auto">
-        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
-            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
-            <nav class="flex space-x-4">
-                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
-                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
-                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
-            </nav>
-        </div>
-        
-        {% if mensaje %}
-        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
-        {% endif %}
-
-        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
-            <h2 class="text-2xl font-bold mb-6 text-gray-800">Editar Consumo</h2>
-            <form action="{{ url_for('actualizar_consumo', consumo_id=consumo.id) }}" method="POST" class="space-y-6">
-                <div>
-                    <label for="familia" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
-                    <select id="familia" name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
-                        {% for familia in familias %}
-                        <option value="{{ familia.id }}" {% if consumo.familia_id == familia.id %}selected{% endif %}>{{ familia.nombre }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div>
-                    <label for="servicio" class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
-                    <select id="servicio" name="servicio" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200">
-                        <option value="Luz" {% if consumo.servicio == 'Luz' %}selected{% endif %}>Luz (kWh)</option>
-                        <option value="Agua" {% if consumo.servicio == 'Agua' %}selected{% endif %}>Agua (m³)</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="fecha" class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
-                    <input type="date" id="fecha" name="fecha" value="{{ consumo.fecha }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
-                </div>
-                <div>
-                    <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
-                    <input type="number" step="0.01" id="lectura" name="lectura" value="{{ consumo.lectura }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
-                </div>
-                <div class="flex justify-end space-x-4">
-                    <a href="{{ url_for('index') }}" class="inline-flex items-center px-6 py-3 border border-gray-300 text-sm font-medium rounded-xl text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300">Cancelar</a>
-                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Cambios</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</body>
-</html>
+CONFIG_HTML = """
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Config</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 min-h-screen p-4 md:p-8"><div class="container mx-auto"><div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex justify-between"><h1 class="text-3xl font-bold text-gray-800">Gestor</h1><nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600">Inicio</a></nav></div>{% if mensaje %}<div class="bg-green-100 p-4 rounded mb-6">{{ mensaje }}</div>{% endif %}<div class="bg-white rounded-2xl shadow-xl p-6"><form method="POST" class="space-y-4"><h3 class="font-bold">Familias</h3>{% for f in familias %}<div><label>{{ f.nombre }}:</label><input type="text" name="familia_nombre_{{ f.id }}" value="{{ f.nombre }}" class="border rounded p-2 w-full"></div>{% endfor %}<hr><h3 class="font-bold">Costos Base</h3><div><label>Costo kWh:</label><input type="number" step="0.0001" name="costo_kwh" value="{{ config.costo_kwh }}" class="border rounded p-2 w-full"></div><div><label>Costo m3:</label><input type="number" step="0.0001" name="costo_m3" value="{{ config.costo_m3 }}" class="border rounded p-2 w-full"></div><div><label>IGV (%):</label><input type="number" step="0.01" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="border rounded p-2 w-full"></div><button class="bg-blue-600 text-white px-6 py-2 rounded">Guardar</button></form></div></div></body></html>
 """
 
-CONFIG_HTML = """
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Configuración - App de Consumo</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style> body { font-family: 'Inter', sans-serif; } </style>
-</head>
-<body class="bg-gray-100 min-h-screen p-4 md:p-8">
-    <div class="container mx-auto">
-        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
-            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
-            <nav class="flex space-x-4">
-                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
-                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
-                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
-            </nav>
-        </div>
-        
-        {% if mensaje %}
-        <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
-        {% endif %}
-
-        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
-            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ajustar Configuración</h2>
-            <form action="{{ url_for('configuracion') }}" method="POST" class="space-y-6">
-                <div class="space-y-4">
-                    <h3 class="text-xl font-semibold text-gray-700">Nombres de Familias</h3>
-                    {% for familia in familias %}
-                    <div>
-                        <label for="familia_nombre_{{ familia.id }}" class="block text-sm font-medium text-gray-700 mb-1">{{ familia.nombre }}:</label>
-                        <input type="text" id="familia_nombre_{{ familia.id }}" name="familia_nombre_{{ familia.id }}" value="{{ familia.nombre }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
-                    </div>
-                    {% endfor %}
-                </div>
-                
-                <hr class="my-6 border-gray-200">
-
-                <div class="space-y-4">
-                    <h3 class="text-xl font-semibold text-gray-700">Costos por Unidad (S/)</h3>
-                    <div>
-                        <label for="costo_kwh" class="block text-sm font-medium text-gray-700 mb-1">Costo por kWh (Luz):</label>
-                        <input type="number" step="0.01" id="costo_kwh" name="costo_kwh" value="{{ config.costo_kwh }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
-                    </div>
-                    <div>
-                        <label for="costo_m3" class="block text-sm font-medium text-gray-700 mb-1">Costo por m³ (Agua):</label>
-                        <input type="number" step="0.01" id="costo_m3" name="costo_m3" value="{{ config.costo_m3 }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
-                    </div>
-                    <div>
-                        <label for="igv_porcentaje" class="block text-sm font-medium text-gray-700 mb-1">Porcentaje de IGV (ej: 0.18 para 18%):</label>
-                        <input type="number" step="0.01" id="igv_porcentaje" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200">
-                    </div>
-                </div>
-
-                <div class="flex justify-end">
-                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Configuración</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</body>
-</html>
+EDIT_HTML = """
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Editar</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 p-8"><div class="max-w-md mx-auto bg-white rounded-xl shadow-md p-6"><h2 class="text-2xl font-bold mb-4">Editar</h2><form action="{{ url_for('actualizar_consumo', cid=consumo.id) }}" method="POST" class="space-y-4"><div><label>Familia</label><select name="familia" class="w-full border p-2">{% for f in familias %}<option value="{{ f.id }}" {% if consumo.familia_id == f.id %}selected{% endif %}>{{ f.nombre }}</option>{% endfor %}</select></div><div><label>Servicio</label><select name="servicio" class="w-full border p-2"><option value="Luz" {% if consumo.servicio == 'Luz' %}selected{% endif %}>Luz</option><option value="Agua" {% if consumo.servicio == 'Agua' %}selected{% endif %}>Agua</option></select></div><div><label>Fecha</label><input type="date" name="fecha" value="{{ consumo.fecha }}" class="w-full border p-2"></div><div><label>Lectura</label><input type="number" step="0.01" name="lectura" value="{{ consumo.lectura }}" class="w-full border p-2"></div><hr>
+<div class="bg-yellow-50 p-2 rounded"><p class="font-bold text-xs">Extras Luz (Total Recibo):</p><input placeholder="Cargo Fijo" name="luz_cargo_fijo" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Mantenimiento" name="luz_mantenimiento" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Alumbrado" name="luz_alumbrado" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Interés" name="luz_interes" type="number" step="0.01" class="border w-full text-xs"></div>
+<div class="bg-blue-50 p-2 rounded"><p class="font-bold text-xs">Extras Agua (Total Recibo):</p><input placeholder="Alcantarillado" name="agua_alcantarillado" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Cargo Fijo" name="agua_cargo_fijo" type="number" step="0.01" class="border w-full text-xs"></div>
+<div class="flex justify-end gap-2"><a href="{{ url_for('index') }}" class="px-4 py-2 border rounded">Cancelar</a><button class="bg-blue-600 text-white px-4 py-2 rounded">Guardar</button></div></form></div></body></html>
 """
 
 if __name__ == '__main__':
-    print("DEBUG: Iniciando la aplicación Flask en modo de desarrollo.")
+    print("DEBUG: Iniciando App...")
     app.run(debug=True)
