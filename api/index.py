@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final: Filtros + Popup + Costos Fijos + Configuración Estática)
+# Código principal de la aplicación Flask (Versión Final Blindada)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session
@@ -47,6 +47,17 @@ CONFIG_DOC = "config"
 LOGIN_DOC = "login"
 
 # =======================================================
+# Utilidades de Seguridad (Para evitar error 500)
+# =======================================================
+def safe_float(val):
+    """Convierte un valor a float de forma segura. Si es vacío o inválido, devuelve 0.0"""
+    try:
+        if not val: return 0.0
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
+# =======================================================
 # Lógica de Datos
 # =======================================================
 def cargar_datos_desde_firebase():
@@ -55,10 +66,17 @@ def cargar_datos_desde_firebase():
         config_ref = db.collection(CONFIG_DOC).document(LOGIN_DOC)
         config_data = config_ref.get().to_dict() or {}
         
-        if not config_data:
-            config_data = {"costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, "igv_porcentaje": IGV_PORCENTAJE, "usuario": LOGIN_USER, "contrasena": LOGIN_PASS}
-            config_ref.set(config_data)
+        # Configuración por defecto si falta
+        defaults = {
+            "costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, 
+            "igv_porcentaje": IGV_PORCENTAJE, "usuario": LOGIN_USER, "contrasena": LOGIN_PASS
+        }
+        for k, v in defaults.items():
+            if k not in config_data: config_data[k] = v
+            
+        if not config_ref.get().exists: config_ref.set(config_data)
 
+        # Familias
         familias = []
         familias_docs = list(db.collection(FAMILIAS_COLLECTION).order_by("id").stream())
         if not familias_docs:
@@ -70,20 +88,20 @@ def cargar_datos_desde_firebase():
         else:
             familias = [d.to_dict() for d in familias_docs]
 
+        # Consumos (NORMALIZACIÓN DE DATOS ANTIGUOS)
         consumos = []
         for doc in db.collection(CONSUMOS_COLLECTION).stream():
             d = doc.to_dict()
             if 'servicio' in d:
                 d['id'] = doc.id
+                # Rellenar campos nuevos con 0 si no existen en registros viejos
+                for key in ['luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes', 'agua_alcantarillado', 'agua_cargo_fijo']:
+                    if key not in d: d[key] = 0.0
                 consumos.append(d)
         
-        return {
-            "familias": familias, 
-            "consumos": consumos, 
-            "config": config_data, 
-            "login": config_data
-        }
-    except Exception:
+        return {"familias": familias, "consumos": consumos, "config": config_data, "login": config_data}
+    except Exception as e:
+        print(f"Error cargando datos: {e}")
         return {"familias": [], "consumos": [], "config": {}, "login": {}}
 
 def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None):
@@ -104,43 +122,50 @@ def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None
     return lectura_anterior
 
 # =======================================================
-# Lógica de Costos Fijos y Porcentajes
+# Lógica de Cálculo de Extras (Prorrateo)
 # =======================================================
 def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
-    """Calcula los montos adicionales según la familia y el servicio."""
+    """
+    Calcula los montos prorrateados (13% o 43.5%) y devuelve los valores individuales y el total final.
+    """
+    # 1. Determinar porcentaje según el ID de la familia
+    # OJO: Asumimos que los IDs en la base de datos son 'familia_1', 'familia_2', etc.
     porcentaje = 0.0
     if familia_id == 'familia_1':
-        porcentaje = 0.13 # 13%
-    elif familia_id == 'familia_2' or familia_id == 'familia_3':
+        porcentaje = 0.13  # 13%
+    elif familia_id in ['familia_2', 'familia_3']:
         porcentaje = 0.435 # 43.5%
+    # Si hay más familias (4, 5), por defecto no se les cobra extra o se puede definir aquí.
     
-    extras = {
+    # 2. Capturar valores brutos del formulario (Totales del recibo)
+    raw_luz_cargo = safe_float(form_data.get('luz_cargo_fijo'))
+    raw_luz_mant = safe_float(form_data.get('luz_mantenimiento'))
+    raw_luz_alum = safe_float(form_data.get('luz_alumbrado'))
+    raw_luz_int = safe_float(form_data.get('luz_interes'))
+    
+    raw_agua_alcan = safe_float(form_data.get('agua_alcantarillado'))
+    raw_agua_cargo = safe_float(form_data.get('agua_cargo_fijo'))
+
+    # 3. Calcular prorrateo
+    extras_calculados = {
         "luz_cargo_fijo": 0.0, "luz_mantenimiento": 0.0, "luz_alumbrado": 0.0, "luz_interes": 0.0,
         "agua_alcantarillado": 0.0, "agua_cargo_fijo": 0.0
     }
-    
+
     if servicio == "Luz":
-        raw_cargo = float(form_data.get('luz_cargo_fijo', 0) or 0)
-        raw_mant = float(form_data.get('luz_mantenimiento', 0) or 0)
-        raw_alum = float(form_data.get('luz_alumbrado', 0) or 0)
-        raw_int = float(form_data.get('luz_interes', 0) or 0)
-
-        extras['luz_cargo_fijo'] = raw_cargo * porcentaje
-        extras['luz_mantenimiento'] = raw_mant * porcentaje
-        extras['luz_alumbrado'] = raw_alum * porcentaje
-        extras['luz_interes'] = raw_int * porcentaje
-
+        extras_calculados['luz_cargo_fijo'] = raw_luz_cargo * porcentaje
+        extras_calculados['luz_mantenimiento'] = raw_luz_mant * porcentaje
+        extras_calculados['luz_alumbrado'] = raw_luz_alum * porcentaje
+        extras_calculados['luz_interes'] = raw_luz_int * porcentaje
     elif servicio == "Agua":
-        raw_alcan = float(form_data.get('agua_alcantarillado', 0) or 0)
-        raw_cargo = float(form_data.get('agua_cargo_fijo', 0) or 0)
+        extras_calculados['agua_alcantarillado'] = raw_agua_alcan * porcentaje
+        extras_calculados['agua_cargo_fijo'] = raw_agua_cargo * porcentaje
 
-        extras['agua_alcantarillado'] = raw_alcan * porcentaje
-        extras['agua_cargo_fijo'] = raw_cargo * porcentaje
-
-    total_extras = sum(extras.values())
+    # 4. Calcular total final
+    total_extras = sum(extras_calculados.values())
     costo_final = subtotal_con_igv + total_extras
     
-    return extras, costo_final
+    return extras_calculados, costo_final
 
 # =======================================================
 # Rutas
@@ -176,8 +201,9 @@ def index():
             familia_id = request.form["familia"]
             servicio = request.form["servicio"]
             fecha = request.form["fecha"]
-            lectura_actual = float(request.form["lectura"])
+            lectura_actual = safe_float(request.form["lectura"])
 
+            # Cálculos Base (Consumo de energía/agua)
             familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
             lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
             consumo = max(0, lectura_actual - lectura_anterior)
@@ -193,8 +219,10 @@ def index():
             igv_monto = subtotal * datos["config"]["igv_porcentaje"]
             base_con_igv = subtotal + igv_monto
 
-            extras_calculados, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
+            # Cálculos de Extras (Prorrateo)
+            extras_data, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
             
+            # Construir objeto para guardar
             nuevo_consumo = {
                 "fecha": fecha,
                 "familia_id": familia_id,
@@ -208,14 +236,15 @@ def index():
                 "igv_monto": igv_monto,
                 "costo_total": costo_total,
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                **extras_calculados
+                # Guardamos los valores YA PRORRATEADOS individualmente
+                **extras_data 
             }
             
             if db: db.collection(CONSUMOS_COLLECTION).add(nuevo_consumo)
             mensaje = "Datos guardados correctamente."
         except Exception as e:
             mensaje = f"Error: {e}"
-            print(e)
+            print(f"Error detallado: {e}")
         
         return redirect(url_for('index', mensaje=mensaje))
     
@@ -233,9 +262,9 @@ def configuracion():
                 db.collection(FAMILIAS_COLLECTION).document(fam['id']).update({"nombre": nuevo})
             
             db.collection(CONFIG_DOC).document(LOGIN_DOC).update({
-                "costo_kwh": float(request.form["costo_kwh"]),
-                "costo_m3": float(request.form["costo_m3"]),
-                "igv_porcentaje": float(request.form["igv_porcentaje"])
+                "costo_kwh": safe_float(request.form["costo_kwh"]),
+                "costo_m3": safe_float(request.form["costo_m3"]),
+                "igv_porcentaje": safe_float(request.form["igv_porcentaje"])
             })
             mensaje = "Configuración guardada."
         except Exception: mensaje = "Error al guardar."
@@ -266,7 +295,7 @@ def actualizar_consumo(cid):
         familia_id = request.form["familia"]
         servicio = request.form["servicio"]
         fecha = request.form["fecha"]
-        lectura_actual = float(request.form["lectura"])
+        lectura_actual = safe_float(request.form["lectura"])
         
         familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
         lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha, excluir_id=cid)
@@ -283,14 +312,14 @@ def actualizar_consumo(cid):
         igv_monto = subtotal * datos["config"]["igv_porcentaje"]
         base_con_igv = subtotal + igv_monto
 
-        extras_calculados, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
+        extras_data, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
 
         nuevos_datos = {
             "fecha": fecha, "familia_id": familia_id, "familia_nombre": familia_nombre,
             "servicio": servicio, "lectura": lectura_actual, "lectura_anterior": lectura_anterior,
             "consumo": consumo, "unidad": unidad, "subtotal": subtotal, "igv_monto": igv_monto,
             "costo_total": costo_total, "timestamp": firestore.SERVER_TIMESTAMP,
-            **extras_calculados
+            **extras_data
         }
         db.collection(CONSUMOS_COLLECTION).document(cid).update(nuevos_datos)
         mensaje = "Actualizado."
@@ -298,7 +327,7 @@ def actualizar_consumo(cid):
     return redirect(url_for('index', mensaje=mensaje))
 
 # =======================================================
-# HTML Templates (Frontend)
+# HTML Templates
 # =======================================================
 
 LOGIN_HTML = """
@@ -373,12 +402,13 @@ INDEX_HTML = """
                             data-subtotal="S/ {{ '%.2f'|format(c.subtotal) }}"
                             data-igv="S/ {{ '%.2f'|format(c.igv_monto) }}"
                             data-total="S/ {{ '%.2f'|format(c.costo_total) }}"
-                            data-luz-cargo="S/ {{ '%.2f'|format(c.luz_cargo_fijo|default(0)) }}"
-                            data-luz-mant="S/ {{ '%.2f'|format(c.luz_mantenimiento|default(0)) }}"
-                            data-luz-alum="S/ {{ '%.2f'|format(c.luz_alumbrado|default(0)) }}"
-                            data-luz-int="S/ {{ '%.2f'|format(c.luz_interes|default(0)) }}"
-                            data-agua-alcan="S/ {{ '%.2f'|format(c.agua_alcantarillado|default(0)) }}"
-                            data-agua-cargo="S/ {{ '%.2f'|format(c.agua_cargo_fijo|default(0)) }}"
+                            
+                            data-luz-cargo="S/ {{ '%.2f'|format(c.luz_cargo_fijo|float) }}"
+                            data-luz-mant="S/ {{ '%.2f'|format(c.luz_mantenimiento|float) }}"
+                            data-luz-alum="S/ {{ '%.2f'|format(c.luz_alumbrado|float) }}"
+                            data-luz-int="S/ {{ '%.2f'|format(c.luz_interes|float) }}"
+                            data-agua-alcan="S/ {{ '%.2f'|format(c.agua_alcantarillado|float) }}"
+                            data-agua-cargo="S/ {{ '%.2f'|format(c.agua_cargo_fijo|float) }}"
                         >
                             <td class="px-4 py-2 text-sm">{{ c.fecha }}</td>
                             <td class="px-4 py-2 text-sm celda-familia">{{ c.familia_nombre }}</td>
