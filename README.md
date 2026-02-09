@@ -1,4 +1,4 @@
-# ⚡💧 Gestor de Consumos (Utilities Manager)
+# ⚡💧 Gestor de Consumos (Luz y Agua)
 
 <div align="center">
   <img src="https://i.imgur.com/ApFJxSE.png" alt="Logo Gestor de Consumos" width="150">
@@ -69,3 +69,4 @@ Total Final: Base Imponible * (1 + %IGV)
 
 ## 📄 Licencia
 Este proyecto está hecho con ❤️ por Oscar Toledo.
+
