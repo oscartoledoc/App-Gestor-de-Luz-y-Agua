@@ -46,3 +46,26 @@ El proyecto sigue una arquitectura modular para facilitar la escalabilidad y el 
 │   └── templates/        # Vistas (HTML + Jinja2 + Tailwind)
 ├── requirements.txt      # Dependencias del proyecto
 └── vercel.json           # Configuración de despliegue
+```
+
+## 🧠 Lógica de Negocio (Cálculo)
+El sistema utiliza la siguiente fórmula para determinar el total a pagar por cada registro:
+
+Costo Consumo: (Lectura Actual - Lectura Anterior) * Costo Unitario
+
+Extras Prorrateados: Se ingresa el total del recibo (ej. Alumbrado Público) y el sistema calcula la parte proporcional según la familia seleccionada (13% o 43.5%).
+
+Base Imponible: Costo Consumo + Extras Prorrateados
+
+Total Final: Base Imponible * (1 + %IGV)
+
+### Login
+<img width="784" height="620" alt="image" src="https://github.com/user-attachments/assets/083c9df2-3c76-4d84-a4ab-cdefdfac3960" />
+
+### Inicio
+<img width="1845" height="965" alt="image" src="https://github.com/user-attachments/assets/6b178b7f-1c40-43df-bfc4-772d624d77db" />
+<img width="1859" height="572" alt="image" src="https://github.com/user-attachments/assets/a6476db7-e265-48a9-a2a0-03c5f42a81b7" />
+
+
+## 📄 Licencia
+Este proyecto está hecho con ❤️ por Oscar Toledo.
