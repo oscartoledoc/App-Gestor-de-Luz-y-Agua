@@ -499,8 +499,6 @@ INDEX_HTML = """
                 </div>
                 <div>
                     <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
-                    <input type="number" step="0.01" id="lectura" name="lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
-                    <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
                     <input type="number" step="0.01" id="lectura" name="lectura" placeholder="Inserte aquí la lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
                 <div class="flex justify-end">
