@@ -1,6 +1,5 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final Blindada contra Datos Antiguos)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session
@@ -47,19 +46,15 @@ CONFIG_DOC = "config"
 LOGIN_DOC = "login"
 
 # =======================================================
-# Utilidades de Seguridad
+# Utilidades
 # =======================================================
 def safe_float(val):
-    """Convierte un valor a float de forma segura. Si es vacío o inválido, devuelve 0.0"""
     try:
         if not val: return 0.0
         return float(val)
     except (ValueError, TypeError):
         return 0.0
 
-# =======================================================
-# Lógica de Datos
-# =======================================================
 def cargar_datos_desde_firebase():
     if db is None: return {"familias": [], "consumos": [], "config": {}, "login": {}}
     try:
@@ -75,7 +70,6 @@ def cargar_datos_desde_firebase():
             
         if not config_ref.get().exists: config_ref.set(config_data)
 
-        # Familias
         familias = []
         familias_docs = list(db.collection(FAMILIAS_COLLECTION).order_by("id").stream())
         if not familias_docs:
@@ -87,30 +81,26 @@ def cargar_datos_desde_firebase():
         else:
             familias = [d.to_dict() for d in familias_docs]
 
-        # Consumos (AQUÍ ESTÁ LA CORRECCIÓN DEL ERROR)
         consumos = []
         for doc in db.collection(CONSUMOS_COLLECTION).stream():
             d = doc.to_dict()
             if 'servicio' in d:
                 d['id'] = doc.id
+                # Normalización de datos antiguos
+                campos_extra = ['luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes', 'agua_alcantarillado', 'agua_cargo_fijo']
+                for campo in campos_extra:
+                    if campo not in d: d[campo] = 0.0
                 
-                # Definimos TODOS los campos numéricos que usa el HTML
-                campos_numericos = [
-                    'lectura_anterior', 'lectura', 'consumo', 'subtotal', 'igv_monto', 'costo_total',
-                    'luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes',
-                    'agua_alcantarillado', 'agua_cargo_fijo'
-                ]
-                
-                # Si el registro no tiene el campo, lo creamos con valor 0.0
-                for campo in campos_numericos:
-                    if campo not in d:
-                        d[campo] = 0.0
-                
-                # Asegurar campos de texto básicos
-                d.setdefault('familia_nombre', 'Familia Desconocida')
-                d.setdefault('fecha', '1970-01-01')
+                # Asegurar campos base
+                d.setdefault('lectura_anterior', 0.0)
+                d.setdefault('lectura', 0.0)
+                d.setdefault('consumo', 0.0)
+                d.setdefault('subtotal', 0.0)
+                d.setdefault('igv_monto', 0.0)
+                d.setdefault('costo_total', 0.0)
+                d.setdefault('familia_nombre', '---')
                 d.setdefault('unidad', '')
-
+                
                 consumos.append(d)
         
         return {"familias": familias, "consumos": consumos, "config": config_data, "login": config_data}
@@ -135,9 +125,6 @@ def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None
     except Exception: pass
     return lectura_anterior
 
-# =======================================================
-# Lógica de Cálculo de Extras (Prorrateo)
-# =======================================================
 def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
     porcentaje = 0.0
     if familia_id == 'familia_1':
@@ -145,32 +132,23 @@ def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
     elif familia_id in ['familia_2', 'familia_3']:
         porcentaje = 0.435
     
-    raw_luz_cargo = safe_float(form_data.get('luz_cargo_fijo'))
-    raw_luz_mant = safe_float(form_data.get('luz_mantenimiento'))
-    raw_luz_alum = safe_float(form_data.get('luz_alumbrado'))
-    raw_luz_int = safe_float(form_data.get('luz_interes'))
-    
-    raw_agua_alcan = safe_float(form_data.get('agua_alcantarillado'))
-    raw_agua_cargo = safe_float(form_data.get('agua_cargo_fijo'))
-
-    extras_calculados = {
+    extras = {
         "luz_cargo_fijo": 0.0, "luz_mantenimiento": 0.0, "luz_alumbrado": 0.0, "luz_interes": 0.0,
         "agua_alcantarillado": 0.0, "agua_cargo_fijo": 0.0
     }
 
     if servicio == "Luz":
-        extras_calculados['luz_cargo_fijo'] = raw_luz_cargo * porcentaje
-        extras_calculados['luz_mantenimiento'] = raw_luz_mant * porcentaje
-        extras_calculados['luz_alumbrado'] = raw_luz_alum * porcentaje
-        extras_calculados['luz_interes'] = raw_luz_int * porcentaje
+        extras['luz_cargo_fijo'] = safe_float(form_data.get('luz_cargo_fijo')) * porcentaje
+        extras['luz_mantenimiento'] = safe_float(form_data.get('luz_mantenimiento')) * porcentaje
+        extras['luz_alumbrado'] = safe_float(form_data.get('luz_alumbrado')) * porcentaje
+        extras['luz_interes'] = safe_float(form_data.get('luz_interes')) * porcentaje
     elif servicio == "Agua":
-        extras_calculados['agua_alcantarillado'] = raw_agua_alcan * porcentaje
-        extras_calculados['agua_cargo_fijo'] = raw_agua_cargo * porcentaje
+        extras['agua_alcantarillado'] = safe_float(form_data.get('agua_alcantarillado')) * porcentaje
+        extras['agua_cargo_fijo'] = safe_float(form_data.get('agua_cargo_fijo')) * porcentaje
 
-    total_extras = sum(extras_calculados.values())
+    total_extras = sum(extras.values())
     costo_final = subtotal_con_igv + total_extras
-    
-    return extras_calculados, costo_final
+    return extras, costo_final
 
 # =======================================================
 # Rutas
@@ -226,18 +204,10 @@ def index():
             extras_data, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
             
             nuevo_consumo = {
-                "fecha": fecha,
-                "familia_id": familia_id,
-                "familia_nombre": familia_nombre,
-                "servicio": servicio,
-                "lectura": lectura_actual,
-                "lectura_anterior": lectura_anterior,
-                "consumo": consumo,
-                "unidad": unidad,
-                "subtotal": subtotal,
-                "igv_monto": igv_monto,
-                "costo_total": costo_total,
-                "timestamp": firestore.SERVER_TIMESTAMP,
+                "fecha": fecha, "familia_id": familia_id, "familia_nombre": familia_nombre,
+                "servicio": servicio, "lectura": lectura_actual, "lectura_anterior": lectura_anterior,
+                "consumo": consumo, "unidad": unidad, "subtotal": subtotal, "igv_monto": igv_monto,
+                "costo_total": costo_total, "timestamp": firestore.SERVER_TIMESTAMP,
                 **extras_data 
             }
             
@@ -245,11 +215,10 @@ def index():
             mensaje = "Datos guardados correctamente."
         except Exception as e:
             mensaje = f"Error: {e}"
-            print(f"Error detallado: {e}")
         
         return redirect(url_for('index', mensaje=mensaje))
     
-    # CORRECCIÓN DE ERROR 500 (Sort timestamp)
+    # Ordenamiento seguro (str vs str)
     historial = sorted(
         datos["consumos"], 
         key=lambda x: str(x.get("timestamp")) if x.get("timestamp") else x.get("fecha", '0'), 
@@ -292,11 +261,7 @@ def editar_consumo(cid):
     consumo = doc.to_dict()
     consumo['id'] = cid
     
-    # Rellenar campos faltantes en el objeto consumo individual (para el form de edición)
-    campos_numericos = [
-        'luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes',
-        'agua_alcantarillado', 'agua_cargo_fijo'
-    ]
+    campos_numericos = ['luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes', 'agua_alcantarillado', 'agua_cargo_fijo']
     for campo in campos_numericos:
         if campo not in consumo: consumo[campo] = 0.0
 
@@ -347,7 +312,7 @@ def actualizar_consumo(cid):
 
 LOGIN_HTML = """
 <!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 flex items-center justify-center h-screen"><div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md"><h2 class="text-3xl font-bold text-center mb-6">Iniciar Sesión</h2>{% if error %}<p class="bg-red-100 text-red-700 p-3 mb-4 rounded">{{ error }}</p>{% endif %}<form method="POST"><div class="mb-4"><label class="block text-gray-700 text-sm font-bold mb-2">Usuario</label><input type="text" name="usuario" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required></div><div class="mb-6"><label class="block text-gray-700 text-sm font-bold mb-2">Contraseña</label><input type="password" name="contrasena" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline" required></div><button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full">Entrar</button></form></div></body></html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 flex items-center justify-center h-screen"><div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md"><h2 class="text-3xl font-bold text-center mb-6 text-gray-800">Iniciar Sesión</h2>{% if error %}<p class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-xl">{{ error }}</p>{% endif %}<form method="POST"><div class="mb-4"><label class="block text-gray-700 text-sm font-semibold mb-2">Usuario</label><input type="text" name="usuario" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required></div><div class="mb-6"><label class="block text-gray-700 text-sm font-semibold mb-2">Contraseña</label><input type="password" name="contrasena" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required></div><div class="flex items-center justify-between"><button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl focus:outline-none focus:shadow-outline transition-all duration-300">Entrar</button></div></form></div></body></html>
 """
 
 INDEX_HTML = """
@@ -356,60 +321,115 @@ INDEX_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestor de Consumos</title>
+    <title>App de Consumo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>.tooltip-container {position: relative;display: inline-block;}.tooltip {visibility: hidden;width: 140px;background-color: #333;color: #fff;text-align: center;border-radius: 6px;padding: 5px 0;position: absolute;z-index: 10;bottom: 125%;left: 50%;margin-left: -70px;opacity: 0;transition: opacity 0.3s;}.tooltip-container:hover .tooltip {visibility: visible;opacity: 1;}</style>
+    <style>body { font-family: 'Inter', sans-serif; } .tooltip-container { position: relative; display: inline-block; } .tooltip { visibility: hidden; width: 140px; background-color: #333; color: #fff; text-align: center; border-radius: 6px; padding: 5px 0; position: absolute; z-index: 10; bottom: 125%; left: 50%; margin-left: -70px; opacity: 0; transition: opacity 0.3s; } .tooltip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #333 transparent transparent transparent; } .tooltip-container:hover .tooltip { visibility: visible; opacity: 1; }</style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 md:p-8">
     <div class="container mx-auto">
         <div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex flex-col md:flex-row items-center justify-between">
-            <h1 class="text-3xl font-bold text-gray-800">Gestor de Consumos</h1>
-            <nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600 font-bold">Inicio</a><a href="{{ url_for('configuracion') }}" class="text-gray-600 hover:text-blue-600">Configuración</a><a href="{{ url_for('logout') }}" class="text-red-600 hover:text-red-800">Salir</a></nav>
+            <h1 class="text-3xl font-bold text-gray-800 mb-4 md:mb-0">Gestor de Consumos</h1>
+            <nav class="flex space-x-4">
+                <a href="{{ url_for('index') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Inicio</a>
+                <a href="{{ url_for('configuracion') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-blue-100 transition-colors duration-200">Configuración</a>
+                <a href="{{ url_for('logout') }}" class="py-2 px-4 text-gray-700 font-semibold rounded-lg hover:bg-red-100 transition-colors duration-200">Cerrar Sesión</a>
+            </nav>
         </div>
-        {% if mensaje %}<div class="bg-green-100 text-green-700 p-4 rounded-xl mb-6">{{ mensaje }}</div>{% endif %}
 
-        <div class="bg-white rounded-2xl shadow-xl p-6 mb-8">
-            <h2 class="text-2xl font-bold mb-4">Ingresar Lectura</h2>
-            <form action="{{ url_for('index') }}" method="POST" class="space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div><label class="block text-sm font-medium mb-1">Familia</label><select name="familia" class="w-full border rounded-lg p-2" required><option value="" disabled selected>-- Selecciona --</option>{% for f in familias %}<option value="{{ f.id }}">{{ f.nombre }}</option>{% endfor %}</select></div>
-                    <div><label class="block text-sm font-medium mb-1">Servicio</label><select id="selectServicio" name="servicio" class="w-full border rounded-lg p-2" onchange="toggleCampos()" required><option value="Luz">Luz</option><option value="Agua">Agua</option></select></div>
-                    <div><label class="block text-sm font-medium mb-1">Fecha</label><input type="date" id="fecha" name="fecha" class="w-full border rounded-lg p-2" required></div>
-                    <div><label class="block text-sm font-medium mb-1">Lectura</label><input type="number" step="0.01" id="lectura" name="lectura" placeholder="Inserte aquí la lectura" class="w-full border rounded-lg p-2" required></div>
+        {% if mensaje %}
+        <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>
+        {% endif %}
+
+        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
+            <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Lectura</h2>
+            <form action="{{ url_for('index') }}" method="POST" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
+                    <select name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200" required>
+                        <option value="" disabled selected>-- Selecciona una familia --</option>
+                        {% for familia in familias %}
+                        <option value="{{ familia.id }}">{{ familia.nombre }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
-                
-                <div id="camposLuz" class="bg-yellow-50 p-4 rounded-xl border border-yellow-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="col-span-full font-bold text-yellow-800">Costos Fijos Luz (Ingresar Total del Recibo):</div>
-                    <div><label class="text-xs">Cargo Fijo</label><input type="number" step="0.01" name="luz_cargo_fijo" class="w-full border rounded p-1"></div>
-                    <div><label class="text-xs">Mant. y Reposición</label><input type="number" step="0.01" name="luz_mantenimiento" class="w-full border rounded p-1"></div>
-                    <div><label class="text-xs">Alumbrado Público</label><input type="number" step="0.01" name="luz_alumbrado" class="w-full border rounded p-1"></div>
-                    <div><label class="text-xs">Interés Compensatorio</label><input type="number" step="0.01" name="luz_interes" class="w-full border rounded p-1"></div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Servicio:</label>
+                    <select id="selectServicio" name="servicio" onchange="toggleCampos()" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200" required>
+                        <option value="Luz">Luz (kWh)</option>
+                        <option value="Agua">Agua (m³)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Fecha:</label>
+                    <input type="date" id="fecha" name="fecha" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
+                    <input type="number" step="0.01" id="lectura" name="lectura" placeholder="Inserte aquí la lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
 
-                <div id="camposAgua" class="hidden bg-blue-50 p-4 rounded-xl border border-blue-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="col-span-full font-bold text-blue-800">Costos Fijos Agua (Ingresar Total del Recibo):</div>
-                    <div><label class="text-xs">Servicio Alcantarillado</label><input type="number" step="0.01" name="agua_alcantarillado" class="w-full border rounded p-1"></div>
-                    <div><label class="text-xs">Cargo Fijo</label><input type="number" step="0.01" name="agua_cargo_fijo" class="w-full border rounded p-1"></div>
+                <div id="camposLuz">
+                    <hr class="my-4 border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-700 mb-3">Costos Fijos Luz (Total Recibo)</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div><label class="text-xs text-gray-600">Cargo Fijo</label><input type="number" step="0.01" name="luz_cargo_fijo" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>
+                        <div><label class="text-xs text-gray-600">Mant. y Reposición</label><input type="number" step="0.01" name="luz_mantenimiento" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>
+                        <div><label class="text-xs text-gray-600">Alumbrado Público</label><input type="number" step="0.01" name="luz_alumbrado" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>
+                        <div><label class="text-xs text-gray-600">Interés Compensatorio</label><input type="number" step="0.01" name="luz_interes" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>
+                    </div>
                 </div>
 
-                <div class="flex justify-end"><button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Guardar</button></div>
+                <div id="camposAgua" class="hidden">
+                    <hr class="my-4 border-gray-200">
+                    <h3 class="text-sm font-bold text-gray-700 mb-3">Costos Fijos Agua (Total Recibo)</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div><label class="text-xs text-gray-600">Servicio Alcantarillado</label><input type="number" step="0.01" name="agua_alcantarillado" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>
+                        <div><label class="text-xs text-gray-600">Cargo Fijo</label><input type="number" step="0.01" name="agua_cargo_fijo" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Lectura</button>
+                </div>
             </form>
         </div>
-
-        <div class="bg-white rounded-2xl shadow-xl p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-xl font-bold">Historial</h2>
-                <div class="flex gap-2">
-                    <select id="filtroFamilia" onchange="aplicarFiltros()" class="border rounded p-1 text-sm"><option value="">Todas</option>{% for f in familias %}<option value="{{ f.nombre }}">{{ f.nombre }}</option>{% endfor %}</select>
-                    <select id="filtroServicio" onchange="aplicarFiltros()" class="border rounded p-1 text-sm"><option value="">Todos</option><option value="Luz">Luz</option><option value="Agua">Agua</option></select>
+        
+        <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8">
+            <div class="flex flex-col md:flex-row justify-between items-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4 md:mb-0">Historial de Consumos</h2>
+                <div class="flex flex-col md:flex-row gap-4 w-full md:w-auto">
+                    <select id="filtroFamilia" onchange="aplicarFiltros()" class="border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-xl shadow-sm text-sm py-2 px-3">
+                        <option value="">Todas las Familias</option>
+                        {% for familia in familias %}
+                        <option value="{{ familia.nombre }}">{{ familia.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                    <select id="filtroServicio" onchange="aplicarFiltros()" class="border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 rounded-xl shadow-sm text-sm py-2 px-3">
+                        <option value="">Todos los Servicios</option>
+                        <option value="Luz">Luz</option>
+                        <option value="Agua">Agua</option>
+                    </select>
                 </div>
             </div>
+
             <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50"><tr><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Fecha</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Familia</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Servicio</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Lec. Ant</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Lec. Act</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Consumo</th><th class="px-4 py-2 text-left text-xs text-gray-500 uppercase">Total</th><th class="px-4 py-2"></th><th class="px-4 py-2"></th></tr></thead>
+                <table class="min-w-full divide-y divide-gray-200 rounded-xl">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fecha</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Familia</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Servicio</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lec. Ant</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lec. Act</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Consumo</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                            <th scope="col" class="relative px-6 py-3"><span class="sr-only">Editar</span></th>
+                            <th scope="col" class="relative px-6 py-3"><span class="sr-only">Eliminar</span></th>
+                        </tr>
+                    </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
                         {% for c in historial %}
-                        <tr class="hover:bg-gray-100 cursor-pointer fila-dato" onclick="abrirModal(this)"
+                        <tr class="hover:bg-gray-50 transition-colors duration-100 fila-dato cursor-pointer" onclick="abrirModal(this)"
                             data-fecha="{{ c.fecha }}" data-familia="{{ c.familia_nombre }}" data-servicio="{{ c.servicio }}"
                             data-lectura-ant="{{ '%.2f'|format(c.lectura_anterior) }} {{ c.unidad }}"
                             data-lectura-act="{{ '%.2f'|format(c.lectura) }} {{ c.unidad }}"
@@ -418,24 +438,30 @@ INDEX_HTML = """
                             data-igv="S/ {{ '%.2f'|format(c.igv_monto) }}"
                             data-total="S/ {{ '%.2f'|format(c.costo_total) }}"
                             
-                            data-luz-cargo="S/ {{ '%.2f'|format(c.luz_cargo_fijo|float) }}"
-                            data-luz-mant="S/ {{ '%.2f'|format(c.luz_mantenimiento|float) }}"
-                            data-luz-alum="S/ {{ '%.2f'|format(c.luz_alumbrado|float) }}"
-                            data-luz-int="S/ {{ '%.2f'|format(c.luz_interes|float) }}"
-                            data-agua-alcan="S/ {{ '%.2f'|format(c.agua_alcantarillado|float) }}"
-                            data-agua-cargo="S/ {{ '%.2f'|format(c.agua_cargo_fijo|float) }}"
+                            data-luz-cargo="S/ {{ '%.2f'|format(c.luz_cargo_fijo) }}"
+                            data-luz-mant="S/ {{ '%.2f'|format(c.luz_mantenimiento) }}"
+                            data-luz-alum="S/ {{ '%.2f'|format(c.luz_alumbrado) }}"
+                            data-luz-int="S/ {{ '%.2f'|format(c.luz_interes) }}"
+                            data-agua-alcan="S/ {{ '%.2f'|format(c.agua_alcantarillado) }}"
+                            data-agua-cargo="S/ {{ '%.2f'|format(c.agua_cargo_fijo) }}"
                         >
-                            <td class="px-4 py-2 text-sm">{{ c.fecha }}</td>
-                            <td class="px-4 py-2 text-sm celda-familia">{{ c.familia_nombre }}</td>
-                            <td class="px-4 py-2 text-sm celda-servicio">{{ c.servicio }}</td>
-                            <td class="px-4 py-2 text-sm">{{ "%.2f"|format(c.lectura_anterior) }}</td>
-                            <td class="px-4 py-2 text-sm">{{ "%.2f"|format(c.lectura) }}</td>
-                            <td class="px-4 py-2 text-sm">{{ "%.2f"|format(c.consumo) }}</td>
-                            <td class="px-4 py-2 text-sm font-bold text-green-600">S/ {{ "%.2f"|format(c.costo_total) }}</td>
-                            <td class="px-4 py-2 text-right"><a href="{{ url_for('editar_consumo', cid=c.id) }}" class="text-blue-600 text-sm" onclick="event.stopPropagation()">Editar</a></td>
-                            <td class="px-4 py-2 text-right"><form action="{{ url_for('eliminar_consumo', cid=c.id) }}" method="POST" onsubmit="return confirm('¿Borrar?');" onclick="event.stopPropagation()"><button class="text-red-600 text-sm">X</button></form></td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ c.fecha }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-familia">{{ c.familia_nombre }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-servicio">{{ c.servicio }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(c.lectura_anterior) }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(c.lectura) }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(c.consumo) }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-bold text-green-600">S/ {{ "%.2f"|format(c.costo_total) }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <a href="{{ url_for('editar_consumo', cid=c.id) }}" class="text-blue-600 hover:text-blue-900" onclick="event.stopPropagation()">Editar</a>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <form action="{{ url_for('eliminar_consumo', cid=c.id) }}" method="POST" onsubmit="return confirm('¿Eliminar?');" onclick="event.stopPropagation()">
+                                    <button type="submit" class="text-red-600 hover:text-red-900">Eliminar</button>
+                                </form>
+                            </td>
                         </tr>
-                        {% else %}<tr><td colspan="9" class="p-4 text-center text-gray-500">Sin datos</td></tr>{% endfor %}
+                        {% else %}<tr><td colspan="9" class="px-6 py-4 text-center text-sm text-gray-500">No hay datos registrados.</td></tr>{% endfor %}
                     </tbody>
                 </table>
             </div>
@@ -444,35 +470,35 @@ INDEX_HTML = """
 
     <div id="modalDetalle" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 z-50 flex items-center justify-center">
         <div class="bg-white p-6 rounded-2xl shadow-lg w-96 relative">
-            <h3 class="text-xl font-bold mb-4 text-center">Detalle de Consumo</h3>
-            <div class="space-y-2 text-sm">
-                <div class="flex justify-between"><span class="text-gray-500">Familia:</span><span id="mFamilia" class="font-bold"></span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Servicio:</span><span id="mServicio"></span></div>
-                <div class="flex justify-between"><span class="text-gray-500">Fecha:</span><span id="mFecha"></span></div>
-                <hr>
-                <div class="flex justify-between"><span>Lectura Ant:</span><span id="mLecturaAnt"></span></div>
-                <div class="flex justify-between"><span>Lectura Act:</span><span id="mLecturaAct"></span></div>
-                <div class="flex justify-between font-bold"><span>Consumo:</span><span id="mConsumo" class="text-blue-600"></span></div>
-                <hr>
-                <div class="flex justify-between"><span>Subtotal Energía/Agua:</span><span id="mSubtotal"></span></div>
+            <h3 class="text-xl font-bold mb-4 text-center text-gray-800">Detalle de Consumo</h3>
+            <div class="space-y-2 text-sm text-gray-600">
+                <div class="flex justify-between"><span>Familia:</span><span id="mFamilia" class="font-bold text-gray-800"></span></div>
+                <div class="flex justify-between"><span>Servicio:</span><span id="mServicio"></span></div>
+                <div class="flex justify-between"><span>Fecha:</span><span id="mFecha"></span></div>
+                <hr class="my-2">
+                <div class="flex justify-between"><span>Lec. Anterior:</span><span id="mLecturaAnt"></span></div>
+                <div class="flex justify-between"><span>Lec. Actual:</span><span id="mLecturaAct"></span></div>
+                <div class="flex justify-between"><span>Consumo:</span><span id="mConsumo" class="font-bold text-blue-600"></span></div>
+                <hr class="my-2">
+                <div class="flex justify-between"><span>Subtotal:</span><span id="mSubtotal"></span></div>
                 <div class="flex justify-between"><span>IGV:</span><span id="mIgv"></span></div>
                 
-                <div id="extrasLuz" class="hidden bg-yellow-50 p-2 rounded text-xs mt-2 space-y-1">
-                    <div class="font-bold text-yellow-800">Cargos Fijos (Prorrateado):</div>
-                    <div class="flex justify-between"><span>Cargo Fijo:</span><span id="mLuzCargo"></span></div>
-                    <div class="flex justify-between"><span>Mantenimiento:</span><span id="mLuzMant"></span></div>
-                    <div class="flex justify-between"><span>Alumbrado:</span><span id="mLuzAlum"></span></div>
-                    <div class="flex justify-between"><span>Interés:</span><span id="mLuzInt"></span></div>
+                <div id="extrasLuz" class="hidden mt-2 pt-2 border-t border-dashed">
+                    <p class="text-xs font-bold mb-1">Cargos Fijos (Prorrateado):</p>
+                    <div class="flex justify-between text-xs"><span>Cargo Fijo:</span><span id="mLuzCargo"></span></div>
+                    <div class="flex justify-between text-xs"><span>Mantenimiento:</span><span id="mLuzMant"></span></div>
+                    <div class="flex justify-between text-xs"><span>Alumbrado:</span><span id="mLuzAlum"></span></div>
+                    <div class="flex justify-between text-xs"><span>Interés:</span><span id="mLuzInt"></span></div>
                 </div>
-                <div id="extrasAgua" class="hidden bg-blue-50 p-2 rounded text-xs mt-2 space-y-1">
-                    <div class="font-bold text-blue-800">Cargos Fijos (Prorrateado):</div>
-                    <div class="flex justify-between"><span>Alcantarillado:</span><span id="mAguaAlcan"></span></div>
-                    <div class="flex justify-between"><span>Cargo Fijo:</span><span id="mAguaCargo"></span></div>
+                <div id="extrasAgua" class="hidden mt-2 pt-2 border-t border-dashed">
+                    <p class="text-xs font-bold mb-1">Cargos Fijos (Prorrateado):</p>
+                    <div class="flex justify-between text-xs"><span>Alcantarillado:</span><span id="mAguaAlcan"></span></div>
+                    <div class="flex justify-between text-xs"><span>Cargo Fijo:</span><span id="mAguaCargo"></span></div>
                 </div>
 
-                <div class="flex justify-between text-lg font-bold mt-4 pt-2 border-t"><span>Total a Pagar:</span><span id="mTotal" class="text-green-600"></span></div>
+                <div class="flex justify-between text-lg font-bold mt-4 pt-4 border-t text-green-700"><span>Total:</span><span id="mTotal"></span></div>
             </div>
-            <button onclick="document.getElementById('modalDetalle').classList.add('hidden')" class="mt-6 w-full bg-blue-600 text-white py-2 rounded-xl">Cerrar</button>
+            <button onclick="document.getElementById('modalDetalle').classList.add('hidden')" class="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-xl">Cerrar</button>
         </div>
     </div>
 
@@ -537,7 +563,6 @@ INDEX_HTML = """
                 document.getElementById('mAguaAlcan').textContent = ds.aguaAlcan;
                 document.getElementById('mAguaCargo').textContent = ds.aguaCargo;
             }
-
             document.getElementById('modalDetalle').classList.remove('hidden');
         }
     </script>
@@ -546,14 +571,11 @@ INDEX_HTML = """
 """
 
 CONFIG_HTML = """
-<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Config</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 min-h-screen p-4 md:p-8"><div class="container mx-auto"><div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex justify-between"><h1 class="text-3xl font-bold text-gray-800">Gestor</h1><nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600">Inicio</a></nav></div>{% if mensaje %}<div class="bg-green-100 p-4 rounded mb-6">{{ mensaje }}</div>{% endif %}<div class="bg-white rounded-2xl shadow-xl p-6"><form method="POST" class="space-y-4"><h3 class="font-bold">Familias</h3>{% for f in familias %}<div><label>Familia {{ loop.index }}:</label><input type="text" name="familia_nombre_{{ f.id }}" value="{{ f.nombre }}" class="border rounded p-2 w-full"></div>{% endfor %}<hr><h3 class="font-bold">Costos Base</h3><div><label>Costo kWh:</label><input type="number" step="0.0001" name="costo_kwh" value="{{ config.costo_kwh }}" class="border rounded p-2 w-full"></div><div><label>Costo m3:</label><input type="number" step="0.0001" name="costo_m3" value="{{ config.costo_m3 }}" class="border rounded p-2 w-full"></div><div><label>IGV (%):</label><input type="number" step="0.01" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="border rounded p-2 w-full"></div><button class="bg-blue-600 text-white px-6 py-2 rounded">Guardar</button></form></div></div></body></html>
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Configuración</title><script src="https://cdn.tailwindcss.com"></script><style> body { font-family: 'Inter', sans-serif; } </style></head><body class="bg-gray-100 min-h-screen p-4 md:p-8"><div class="container mx-auto"><div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex justify-between"><h1 class="text-3xl font-bold text-gray-800">Gestor</h1><nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600 font-bold">Inicio</a></nav></div>{% if mensaje %}<div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded-xl mb-6 shadow-md">{{ mensaje }}</div>{% endif %}<div class="bg-white rounded-2xl shadow-xl p-6"><form method="POST" class="space-y-6"><div class="space-y-4"><h3 class="text-xl font-semibold text-gray-700">Familias</h3>{% for f in familias %}<div><label class="block text-sm font-medium text-gray-700 mb-1">Familia {{ loop.index }}:</label><input type="text" name="familia_nombre_{{ f.id }}" value="{{ f.nombre }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div>{% endfor %}</div><hr class="my-6 border-gray-200"><div class="space-y-4"><h3 class="text-xl font-semibold text-gray-700">Costos Base</h3><div><label class="block text-sm font-medium text-gray-700 mb-1">Costo kWh:</label><input type="number" step="0.0001" name="costo_kwh" value="{{ config.costo_kwh }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div><div><label class="block text-sm font-medium text-gray-700 mb-1">Costo m3:</label><input type="number" step="0.0001" name="costo_m3" value="{{ config.costo_m3 }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div><div><label class="block text-sm font-medium text-gray-700 mb-1">IGV (%):</label><input type="number" step="0.01" name="igv_porcentaje" value="{{ config.igv_porcentaje }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500"></div></div><div class="flex justify-end"><button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-sm font-medium rounded-xl shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">Guardar Configuración</button></div></form></div></div></body></html>
 """
 
 EDIT_HTML = """
-<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Editar</title><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 p-8"><div class="max-w-md mx-auto bg-white rounded-xl shadow-md p-6"><h2 class="text-2xl font-bold mb-4">Editar</h2><form action="{{ url_for('actualizar_consumo', cid=consumo.id) }}" method="POST" class="space-y-4"><div><label>Familia</label><select name="familia" class="w-full border p-2">{% for f in familias %}<option value="{{ f.id }}" {% if consumo.familia_id == f.id %}selected{% endif %}>{{ f.nombre }}</option>{% endfor %}</select></div><div><label>Servicio</label><select name="servicio" class="w-full border p-2"><option value="Luz" {% if consumo.servicio == 'Luz' %}selected{% endif %}>Luz</option><option value="Agua" {% if consumo.servicio == 'Agua' %}selected{% endif %}>Agua</option></select></div><div><label>Fecha</label><input type="date" name="fecha" value="{{ consumo.fecha }}" class="w-full border p-2"></div><div><label>Lectura</label><input type="number" step="0.01" name="lectura" value="{{ consumo.lectura }}" class="w-full border p-2"></div><hr>
-<div class="bg-yellow-50 p-2 rounded"><p class="font-bold text-xs">Extras Luz (Total Recibo):</p><input placeholder="Cargo Fijo" name="luz_cargo_fijo" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Mantenimiento" name="luz_mantenimiento" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Alumbrado" name="luz_alumbrado" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Interés" name="luz_interes" type="number" step="0.01" class="border w-full text-xs"></div>
-<div class="bg-blue-50 p-2 rounded"><p class="font-bold text-xs">Extras Agua (Total Recibo):</p><input placeholder="Alcantarillado" name="agua_alcantarillado" type="number" step="0.01" class="border w-full text-xs mb-1"><input placeholder="Cargo Fijo" name="agua_cargo_fijo" type="number" step="0.01" class="border w-full text-xs"></div>
-<div class="flex justify-end gap-2"><a href="{{ url_for('index') }}" class="px-4 py-2 border rounded">Cancelar</a><button class="bg-blue-600 text-white px-4 py-2 rounded">Guardar</button></div></form></div></body></html>
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Editar</title><script src="https://cdn.tailwindcss.com"></script><style> body { font-family: 'Inter', sans-serif; } </style></head><body class="bg-gray-100 min-h-screen p-4 md:p-8"><div class="container mx-auto"><div class="bg-white rounded-2xl shadow-xl p-6 mb-8 flex justify-between"><h1 class="text-3xl font-bold text-gray-800">Gestor</h1><nav class="flex gap-4"><a href="{{ url_for('index') }}" class="text-blue-600 font-bold">Inicio</a></nav></div><div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8"><h2 class="text-2xl font-bold mb-6 text-gray-800">Editar Consumo</h2><form action="{{ url_for('actualizar_consumo', cid=consumo.id) }}" method="POST" class="space-y-6"><div><label class="block text-sm font-medium text-gray-700 mb-2">Familia</label><select name="familia" class="w-full border rounded-lg p-2">{% for f in familias %}<option value="{{ f.id }}" {% if consumo.familia_id == f.id %}selected{% endif %}>{{ f.nombre }}</option>{% endfor %}</select></div><div><label class="block text-sm font-medium text-gray-700 mb-2">Servicio</label><select name="servicio" class="w-full border rounded-lg p-2"><option value="Luz" {% if consumo.servicio == 'Luz' %}selected{% endif %}>Luz</option><option value="Agua" {% if consumo.servicio == 'Agua' %}selected{% endif %}>Agua</option></select></div><div><label class="block text-sm font-medium text-gray-700 mb-2">Fecha</label><input type="date" name="fecha" value="{{ consumo.fecha }}" class="w-full border rounded-lg p-2"></div><div><label class="block text-sm font-medium text-gray-700 mb-2">Lectura</label><input type="number" step="0.01" name="lectura" value="{{ consumo.lectura }}" class="w-full border rounded-lg p-2"></div><hr class="my-4 border-gray-200"><h3 class="text-sm font-bold text-gray-700 mb-3">Costos Fijos Luz (Total Recibo)</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="text-xs text-gray-600">Cargo Fijo</label><input type="number" step="0.01" name="luz_cargo_fijo" value="{{ consumo.luz_cargo_fijo|default(0) }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3"></div><div><label class="text-xs text-gray-600">Mant.</label><input type="number" step="0.01" name="luz_mantenimiento" value="{{ consumo.luz_mantenimiento|default(0) }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3"></div><div><label class="text-xs text-gray-600">Alumbrado</label><input type="number" step="0.01" name="luz_alumbrado" value="{{ consumo.luz_alumbrado|default(0) }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3"></div><div><label class="text-xs text-gray-600">Interés</label><input type="number" step="0.01" name="luz_interes" value="{{ consumo.luz_interes|default(0) }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3"></div></div><hr class="my-4 border-gray-200"><h3 class="text-sm font-bold text-gray-700 mb-3">Costos Fijos Agua (Total Recibo)</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="text-xs text-gray-600">Alcantarillado</label><input type="number" step="0.01" name="agua_alcantarillado" value="{{ consumo.agua_alcantarillado|default(0) }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3"></div><div><label class="text-xs text-gray-600">Cargo Fijo</label><input type="number" step="0.01" name="agua_cargo_fijo" value="{{ consumo.agua_cargo_fijo|default(0) }}" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3"></div></div><div class="flex justify-end gap-2 mt-6"><a href="{{ url_for('index') }}" class="px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-50">Cancelar</a><button class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Guardar Cambios</button></div></form></div></div></body></html>
 """
 
 if __name__ == '__main__':
