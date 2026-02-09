@@ -1,11 +1,20 @@
+# =======================================================
+# Archivo: app/utils.py
+# =======================================================
+
 def safe_float(val):
+    """Convierte un valor a float de forma segura."""
     try:
         if not val: return 0.0
         return float(val)
     except (ValueError, TypeError):
         return 0.0
 
-def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
+def calcular_extras(familia_id, servicio, form_data):
+    """
+    Calcula solo los montos adicionales prorrateados según la familia.
+    Devuelve un diccionario con los valores.
+    """
     porcentaje = 0.0
     if familia_id == 'familia_1':
         porcentaje = 0.13
@@ -25,8 +34,5 @@ def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
     elif servicio == "Agua":
         extras['agua_alcantarillado'] = safe_float(form_data.get('agua_alcantarillado')) * porcentaje
         extras['agua_cargo_fijo'] = safe_float(form_data.get('agua_cargo_fijo')) * porcentaje
-
-    total_extras = sum(extras.values())
-    costo_final = subtotal_con_igv + total_extras
     
-    return extras, costo_final
+    return extras

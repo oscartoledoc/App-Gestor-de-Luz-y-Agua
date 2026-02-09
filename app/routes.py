@@ -1,10 +1,15 @@
+# =======================================================
+# Archivo: app/routes.py
+# =======================================================
+
 from flask import Blueprint, render_template, request, redirect, url_for, session
 from .services import (
     cargar_datos_desde_firebase, calcular_lectura_anterior, 
     guardar_consumo, actualizar_consumo_db, eliminar_consumo_db, 
     actualizar_configuracion_db, obtener_consumo_por_id
 )
-from .utils import safe_float, calcular_extras_y_total
+# Nota: Importamos la nueva función calcular_extras
+from .utils import safe_float, calcular_extras
 
 main_bp = Blueprint('main', __name__)
 
@@ -49,6 +54,7 @@ def index():
             lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
             consumo = max(0, lectura_actual - lectura_anterior)
             
+            # 1. Calcular Costo del Consumo (Energía/Agua pura)
             if servicio == "Luz":
                 costo_unidad = datos["config"]["costo_kwh"]
                 unidad = "kWh"
@@ -56,16 +62,28 @@ def index():
                 costo_unidad = datos["config"]["costo_m3"]
                 unidad = "m³"
 
-            subtotal = consumo * costo_unidad
-            igv_monto = subtotal * datos["config"]["igv_porcentaje"]
-            base_con_igv = subtotal + igv_monto
+            costo_consumo = consumo * costo_unidad
 
-            extras_data, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
+            # 2. Calcular Extras Prorrateados
+            extras_data = calcular_extras(familia_id, servicio, request.form)
+            total_extras = sum(extras_data.values())
+
+            # 3. NUEVA LÓGICA DE IMPUESTOS
+            # Base Imponible = Consumo + Extras
+            base_imponible = costo_consumo + total_extras
+            
+            # IGV sobre la suma total
+            igv_monto = base_imponible * datos["config"]["igv_porcentaje"]
+            
+            # Total Final
+            costo_total = base_imponible + igv_monto
             
             nuevo_consumo = {
                 "fecha": fecha, "familia_id": familia_id, "familia_nombre": familia_nombre,
                 "servicio": servicio, "lectura": lectura_actual, "lectura_anterior": lectura_anterior,
-                "consumo": consumo, "unidad": unidad, "subtotal": subtotal, "igv_monto": igv_monto,
+                "consumo": consumo, "unidad": unidad, 
+                "subtotal": costo_consumo, # Guardamos el costo de consumo puro como subtotal para referencia
+                "igv_monto": igv_monto,
                 "costo_total": costo_total,
                 **extras_data 
             }
@@ -148,16 +166,24 @@ def actualizar_consumo(cid):
             costo_unidad = datos["config"]["costo_m3"]
             unidad = "m³"
 
-        subtotal = consumo * costo_unidad
-        igv_monto = subtotal * datos["config"]["igv_porcentaje"]
-        base_con_igv = subtotal + igv_monto
+        # 1. Costo Consumo
+        costo_consumo = consumo * costo_unidad
 
-        extras_data, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
+        # 2. Extras
+        extras_data = calcular_extras(familia_id, servicio, request.form)
+        total_extras = sum(extras_data.values())
+
+        # 3. Nueva Lógica IGV
+        base_imponible = costo_consumo + total_extras
+        igv_monto = base_imponible * datos["config"]["igv_porcentaje"]
+        costo_total = base_imponible + igv_monto
 
         nuevos_datos = {
             "fecha": fecha, "familia_id": familia_id, "familia_nombre": familia_nombre,
             "servicio": servicio, "lectura": lectura_actual, "lectura_anterior": lectura_anterior,
-            "consumo": consumo, "unidad": unidad, "subtotal": subtotal, "igv_monto": igv_monto,
+            "consumo": consumo, "unidad": unidad, 
+            "subtotal": costo_consumo, 
+            "igv_monto": igv_monto,
             "costo_total": costo_total,
             **extras_data
         }
