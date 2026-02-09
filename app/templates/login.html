@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <link rel="icon" href="https://i.imgur.com/ApFJxSE.png" type="image/png">
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+        <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">Iniciar Sesión</h2>
+        {% if error %}
+        <p class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4 rounded-xl">{{ error }}</p>
+        {% endif %}
+        <form method="POST">
+            <div class="mb-4">
+                <label class="block text-gray-700 text-sm font-semibold mb-2">Usuario</label>
+                <input type="text" name="usuario" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
+            </div>
+            <div class="mb-6">
+                <label class="block text-gray-700 text-sm font-semibold mb-2">Contraseña</label>
+                <input type="password" name="contrasena" class="shadow appearance-none border rounded-xl w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline transition duration-200" required>
+            </div>
+            <div class="flex items-center justify-between">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl focus:outline-none focus:shadow-outline transition-all duration-300">Entrar</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>
