@@ -1,5 +1,9 @@
 # ⚡💧 Gestor de Consumos (Luz y Agua)
 
+Prueba:
+- usuario: admin
+- clave: 123
+
 <div align="center">
   <img src="https://i.imgur.com/ApFJxSE.png" alt="Logo Gestor de Consumos" width="150">
   <br>
