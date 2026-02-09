@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final Blindada)
+# Código principal de la aplicación Flask (Versión Final Corregida y Blindada)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session
@@ -47,7 +47,7 @@ CONFIG_DOC = "config"
 LOGIN_DOC = "login"
 
 # =======================================================
-# Utilidades de Seguridad (Para evitar error 500)
+# Utilidades de Seguridad
 # =======================================================
 def safe_float(val):
     """Convierte un valor a float de forma segura. Si es vacío o inválido, devuelve 0.0"""
@@ -66,7 +66,6 @@ def cargar_datos_desde_firebase():
         config_ref = db.collection(CONFIG_DOC).document(LOGIN_DOC)
         config_data = config_ref.get().to_dict() or {}
         
-        # Configuración por defecto si falta
         defaults = {
             "costo_kwh": COSTO_KWH_DEFECTO, "costo_m3": COSTO_M3_DEFECTO, 
             "igv_porcentaje": IGV_PORCENTAJE, "usuario": LOGIN_USER, "contrasena": LOGIN_PASS
@@ -125,19 +124,12 @@ def calcular_lectura_anterior(familia_id, servicio, fecha_corte, excluir_id=None
 # Lógica de Cálculo de Extras (Prorrateo)
 # =======================================================
 def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
-    """
-    Calcula los montos prorrateados (13% o 43.5%) y devuelve los valores individuales y el total final.
-    """
-    # 1. Determinar porcentaje según el ID de la familia
-    # OJO: Asumimos que los IDs en la base de datos son 'familia_1', 'familia_2', etc.
     porcentaje = 0.0
     if familia_id == 'familia_1':
-        porcentaje = 0.13  # 13%
+        porcentaje = 0.13
     elif familia_id in ['familia_2', 'familia_3']:
-        porcentaje = 0.435 # 43.5%
-    # Si hay más familias (4, 5), por defecto no se les cobra extra o se puede definir aquí.
+        porcentaje = 0.435
     
-    # 2. Capturar valores brutos del formulario (Totales del recibo)
     raw_luz_cargo = safe_float(form_data.get('luz_cargo_fijo'))
     raw_luz_mant = safe_float(form_data.get('luz_mantenimiento'))
     raw_luz_alum = safe_float(form_data.get('luz_alumbrado'))
@@ -146,7 +138,6 @@ def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
     raw_agua_alcan = safe_float(form_data.get('agua_alcantarillado'))
     raw_agua_cargo = safe_float(form_data.get('agua_cargo_fijo'))
 
-    # 3. Calcular prorrateo
     extras_calculados = {
         "luz_cargo_fijo": 0.0, "luz_mantenimiento": 0.0, "luz_alumbrado": 0.0, "luz_interes": 0.0,
         "agua_alcantarillado": 0.0, "agua_cargo_fijo": 0.0
@@ -161,7 +152,6 @@ def calcular_extras_y_total(familia_id, servicio, subtotal_con_igv, form_data):
         extras_calculados['agua_alcantarillado'] = raw_agua_alcan * porcentaje
         extras_calculados['agua_cargo_fijo'] = raw_agua_cargo * porcentaje
 
-    # 4. Calcular total final
     total_extras = sum(extras_calculados.values())
     costo_final = subtotal_con_igv + total_extras
     
@@ -203,7 +193,6 @@ def index():
             fecha = request.form["fecha"]
             lectura_actual = safe_float(request.form["lectura"])
 
-            # Cálculos Base (Consumo de energía/agua)
             familia_nombre = [f['nombre'] for f in datos['familias'] if f['id'] == familia_id][0]
             lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
             consumo = max(0, lectura_actual - lectura_anterior)
@@ -219,10 +208,8 @@ def index():
             igv_monto = subtotal * datos["config"]["igv_porcentaje"]
             base_con_igv = subtotal + igv_monto
 
-            # Cálculos de Extras (Prorrateo)
             extras_data, costo_total = calcular_extras_y_total(familia_id, servicio, base_con_igv, request.form)
             
-            # Construir objeto para guardar
             nuevo_consumo = {
                 "fecha": fecha,
                 "familia_id": familia_id,
@@ -236,7 +223,6 @@ def index():
                 "igv_monto": igv_monto,
                 "costo_total": costo_total,
                 "timestamp": firestore.SERVER_TIMESTAMP,
-                # Guardamos los valores YA PRORRATEADOS individualmente
                 **extras_data 
             }
             
@@ -248,7 +234,12 @@ def index():
         
         return redirect(url_for('index', mensaje=mensaje))
     
-    historial = sorted(datos["consumos"], key=lambda x: x.get("timestamp") or x.get("fecha", '0'), reverse=True)
+    # CORRECCIÓN DE ERROR 500: Convertir timestamp a string antes de ordenar
+    historial = sorted(
+        datos["consumos"], 
+        key=lambda x: str(x.get("timestamp")) if x.get("timestamp") else x.get("fecha", '0'), 
+        reverse=True
+    )
     return render_template_string(INDEX_HTML, familias=datos["familias"], historial=historial, config=datos["config"], mensaje=request.args.get('mensaje', ''))
 
 @app.route("/configuracion", methods=["GET", "POST"])
