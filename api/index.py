@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final con Filtros y Lógica Temporal)
+# Código principal de la aplicación Flask (Versión Final con Filtros, Lógica Temporal y Popup de Detalle)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session, make_response
@@ -499,7 +499,6 @@ INDEX_HTML = """
                 </div>
                 <div>
                     <label for="lectura" class="block text-sm font-medium text-gray-700 mb-2">Ingresar Lectura del Medidor:</label>
-                    <option value="" disabled selected>-- Ingresa la lectura --</option>
                     <input type="number" step="0.01" id="lectura" name="lectura" class="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-xl py-2 px-3 focus:ring-blue-500 focus:border-blue-500 transition duration-200" required>
                 </div>
                 <div class="flex justify-end">
@@ -525,7 +524,7 @@ INDEX_HTML = """
                         <option value="Agua">Agua</option>
                     </select>
                 </div>
-                </div>
+            </div>
 
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200 rounded-xl">
@@ -544,7 +543,18 @@ INDEX_HTML = """
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
                         {% for consumo in historial %}
-                        <tr class="hover:bg-gray-50 transition-colors duration-100 fila-dato">
+                        <tr class="hover:bg-gray-100 transition-colors duration-100 fila-dato cursor-pointer" 
+                            onclick="abrirModal(this)"
+                            data-fecha="{{ consumo.fecha }}"
+                            data-familia="{{ consumo.familia_nombre }}"
+                            data-servicio="{{ consumo.servicio }}"
+                            data-lectura-ant="{{ '%.2f'|format(consumo.lectura_anterior) }} {{ consumo.unidad }}"
+                            data-lectura-act="{{ '%.2f'|format(consumo.lectura) }} {{ consumo.unidad }}"
+                            data-consumo="{{ '%.2f'|format(consumo.consumo) }} {{ consumo.unidad }}"
+                            data-subtotal="S/ {{ '%.2f'|format(consumo.subtotal) }}"
+                            data-igv="S/ {{ '%.2f'|format(consumo.igv_monto) }}"
+                            data-total="S/ {{ '%.2f'|format(consumo.costo_total) }}">
+                            
                             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ consumo.fecha }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-familia">{{ consumo.familia_nombre }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 celda-servicio">{{ consumo.servicio }}</td>
@@ -552,20 +562,13 @@ INDEX_HTML = """
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.lectura) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ "%.2f"|format(consumo.consumo) }} {{ consumo.unidad }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                <div class="tooltip-container">
-                                    S/ {{ "%.2f"|format(consumo.costo_total) }}
-                                    <span class="tooltip">
-                                        Subtotal: S/ {{ "%.2f"|format(consumo.subtotal) }}<br>
-                                        IGV (18%): S/ {{ "%.2f"|format(consumo.igv_monto) }}<br>
-                                        Total: S/ {{ "%.2f"|format(consumo.costo_total) }}
-                                    </span>
-                                </div>
+                                S/ {{ "%.2f"|format(consumo.costo_total) }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <a href="{{ url_for('editar_consumo', consumo_id=consumo.id) }}" class="text-blue-600 hover:text-blue-900">Editar</a>
+                                <a href="{{ url_for('editar_consumo', consumo_id=consumo.id) }}" class="text-blue-600 hover:text-blue-900" onclick="event.stopPropagation()">Editar</a>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                <form action="{{ url_for('eliminar_consumo', consumo_id=consumo.id) }}" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas eliminar este registro?');">
+                                <form action="{{ url_for('eliminar_consumo', consumo_id=consumo.id) }}" method="POST" onsubmit="return confirm('¿Estás seguro de que deseas eliminar este registro?');" onclick="event.stopPropagation()">
                                     <button type="submit" class="text-red-600 hover:text-red-900">Eliminar</button>
                                 </form>
                             </td>
@@ -580,6 +583,33 @@ INDEX_HTML = """
             </div>
         </div>
     </div>
+
+    <div id="modalDetalle" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50 flex items-center justify-center">
+        <div class="relative p-5 border w-96 shadow-lg rounded-2xl bg-white">
+            <div class="mt-3 text-center">
+                <h3 class="text-2xl leading-6 font-bold text-gray-900 mb-4" id="modalTitulo">Detalle de Consumo</h3>
+                <div class="mt-2 text-left space-y-3 px-4">
+                    <p class="text-sm text-gray-500"><strong>Fecha:</strong> <span id="mFecha"></span></p>
+                    <p class="text-sm text-gray-500"><strong>Familia:</strong> <span id="mFamilia"></span></p>
+                    <p class="text-sm text-gray-500"><strong>Servicio:</strong> <span id="mServicio"></span></p>
+                    <hr>
+                    <p class="text-sm text-gray-500"><strong>Lectura Anterior:</strong> <span id="mLecturaAnt"></span></p>
+                    <p class="text-sm text-gray-500"><strong>Lectura Actual:</strong> <span id="mLecturaAct"></span></p>
+                    <p class="text-sm text-gray-500 font-semibold"><strong>Consumo:</strong> <span id="mConsumo" class="text-blue-600"></span></p>
+                    <hr>
+                    <p class="text-sm text-gray-500"><strong>Subtotal:</strong> <span id="mSubtotal"></span></p>
+                    <p class="text-sm text-gray-500"><strong>IGV (18%):</strong> <span id="mIgv"></span></p>
+                    <p class="text-lg text-gray-800 font-bold mt-2"><strong>Total:</strong> <span id="mTotal" class="text-green-600"></span></p>
+                </div>
+                <div class="items-center px-4 py-3 mt-4">
+                    <button id="ok-btn" onclick="cerrarModal()" class="px-4 py-2 bg-blue-600 text-white text-base font-medium rounded-xl w-full shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300">
+                        Cerrar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         window.addEventListener('DOMContentLoaded', (event) => {
             const today = new Date();
@@ -591,7 +621,7 @@ INDEX_HTML = """
             if (fechaInput) { fechaInput.value = formattedDate; }
         });
 
-        // === LÓGICA DE FILTRADO JS (Client-Side) ===
+        // === LÓGICA DE FILTRADO JS ===
         function aplicarFiltros() {
             const filtroFamilia = document.getElementById('filtroFamilia').value.toLowerCase();
             const filtroServicio = document.getElementById('filtroServicio').value.toLowerCase();
@@ -610,6 +640,35 @@ INDEX_HTML = """
                     fila.style.display = 'none';
                 }
             });
+        }
+
+        // === LÓGICA DEL MODAL POPUP ===
+        function abrirModal(fila) {
+            // Leer datos del dataset de la fila
+            document.getElementById('mFecha').textContent = fila.dataset.fecha;
+            document.getElementById('mFamilia').textContent = fila.dataset.familia;
+            document.getElementById('mServicio').textContent = fila.dataset.servicio;
+            document.getElementById('mLecturaAnt').textContent = fila.dataset.lecturaAnt;
+            document.getElementById('mLecturaAct').textContent = fila.dataset.lecturaAct;
+            document.getElementById('mConsumo').textContent = fila.dataset.consumo;
+            document.getElementById('mSubtotal').textContent = fila.dataset.subtotal;
+            document.getElementById('mIgv').textContent = fila.dataset.igv;
+            document.getElementById('mTotal').textContent = fila.dataset.total;
+
+            // Mostrar el modal
+            document.getElementById('modalDetalle').classList.remove('hidden');
+        }
+
+        function cerrarModal() {
+            document.getElementById('modalDetalle').classList.add('hidden');
+        }
+        
+        // Cerrar modal si se hace clic fuera del contenido
+        window.onclick = function(event) {
+            const modal = document.getElementById('modalDetalle');
+            if (event.target == modal) {
+                cerrarModal();
+            }
         }
     </script>
 </body>
