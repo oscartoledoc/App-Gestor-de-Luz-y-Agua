@@ -1,6 +1,6 @@
 # =======================================================
 # Archivo 1: api/index.py
-# Código principal de la aplicación Flask (Versión Final Corregida y Blindada)
+# Código principal de la aplicación Flask (Versión Final Blindada contra Datos Antiguos)
 # =======================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, session
@@ -87,15 +87,30 @@ def cargar_datos_desde_firebase():
         else:
             familias = [d.to_dict() for d in familias_docs]
 
-        # Consumos (NORMALIZACIÓN DE DATOS ANTIGUOS)
+        # Consumos (AQUÍ ESTÁ LA CORRECCIÓN DEL ERROR)
         consumos = []
         for doc in db.collection(CONSUMOS_COLLECTION).stream():
             d = doc.to_dict()
             if 'servicio' in d:
                 d['id'] = doc.id
-                # Rellenar campos nuevos con 0 si no existen en registros viejos
-                for key in ['luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes', 'agua_alcantarillado', 'agua_cargo_fijo']:
-                    if key not in d: d[key] = 0.0
+                
+                # Definimos TODOS los campos numéricos que usa el HTML
+                campos_numericos = [
+                    'lectura_anterior', 'lectura', 'consumo', 'subtotal', 'igv_monto', 'costo_total',
+                    'luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes',
+                    'agua_alcantarillado', 'agua_cargo_fijo'
+                ]
+                
+                # Si el registro no tiene el campo, lo creamos con valor 0.0
+                for campo in campos_numericos:
+                    if campo not in d:
+                        d[campo] = 0.0
+                
+                # Asegurar campos de texto básicos
+                d.setdefault('familia_nombre', 'Familia Desconocida')
+                d.setdefault('fecha', '1970-01-01')
+                d.setdefault('unidad', '')
+
                 consumos.append(d)
         
         return {"familias": familias, "consumos": consumos, "config": config_data, "login": config_data}
@@ -234,7 +249,7 @@ def index():
         
         return redirect(url_for('index', mensaje=mensaje))
     
-    # CORRECCIÓN DE ERROR 500: Convertir timestamp a string antes de ordenar
+    # CORRECCIÓN DE ERROR 500 (Sort timestamp)
     historial = sorted(
         datos["consumos"], 
         key=lambda x: str(x.get("timestamp")) if x.get("timestamp") else x.get("fecha", '0'), 
@@ -276,6 +291,15 @@ def editar_consumo(cid):
     datos = cargar_datos_desde_firebase()
     consumo = doc.to_dict()
     consumo['id'] = cid
+    
+    # Rellenar campos faltantes en el objeto consumo individual (para el form de edición)
+    campos_numericos = [
+        'luz_cargo_fijo', 'luz_mantenimiento', 'luz_alumbrado', 'luz_interes',
+        'agua_alcantarillado', 'agua_cargo_fijo'
+    ]
+    for campo in campos_numericos:
+        if campo not in consumo: consumo[campo] = 0.0
+
     return render_template_string(EDIT_HTML, consumo=consumo, familias=datos["familias"])
 
 @app.route("/actualizar/<string:cid>", methods=["POST"])
