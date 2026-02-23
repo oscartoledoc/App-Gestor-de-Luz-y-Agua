@@ -150,12 +150,16 @@ def registrar_consumo_ajax():
             **extras_data 
         }
         
-        guardar_consumo(nuevo_consumo)
-        
-        return jsonify({
+        # Devolver JSON antes de guardar para evitar problemas con SERVER_TIMESTAMP
+        respuesta = jsonify({
             "success": True,
             "data": nuevo_consumo
         })
+        
+        # Guardar en Firebase después
+        guardar_consumo(nuevo_consumo)
+        
+        return respuesta
     except Exception as e:
         return jsonify({
             "success": False,
