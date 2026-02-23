@@ -326,7 +326,10 @@
             const data = window.currentConsumoData;
             if (!data) return;
 
-            const mensaje = `Consumo de ${data.servicio} - Familia ${data.familia_nombre}\n\nConsumo: ${data.consumo}\nSubtotal: S/ ${parseFloat(data.subtotal).toFixed(2)}\nIGV: S/ ${parseFloat(data.igv_monto).toFixed(2)}\nTotal: S/ ${parseFloat(data.costo_total).toFixed(2)}`;
+            const fechaParts = data.fecha.split('-');
+            const fechaFormato = `${fechaParts[2]}/${fechaParts[1]}/${fechaParts[0]}`;
+            
+            const mensaje = `Consumo de ${data.servicio}\n\nFecha: ${fechaFormato}\nTotal: S/ ${parseFloat(data.costo_total).toFixed(2)}`;
             
             const numero = '51932494159';
             const mensajeCodificado = encodeURIComponent(mensaje);
