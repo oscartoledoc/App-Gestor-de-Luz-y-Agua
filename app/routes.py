@@ -2,7 +2,7 @@
 # Archivo: app/routes.py
 # =======================================================
 
-from flask import Blueprint, render_template, request, redirect, url_for, session
+from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify
 from .services import (
     cargar_datos_desde_firebase, calcular_lectura_anterior, 
     guardar_consumo, actualizar_consumo_db, eliminar_consumo_db, 
@@ -101,6 +101,66 @@ def index():
         reverse=True
     )
     return render_template('index.html', familias=datos["familias"], historial=historial, config=datos["config"], mensaje=request.args.get('mensaje', ''))
+
+@main_bp.route("/registrar-consumo", methods=["POST"])
+def registrar_consumo_ajax():
+    try:
+        datos = cargar_datos_desde_firebase()
+        familia_id = request.form["familia"]
+        servicio = request.form["servicio"]
+        fecha = request.form["fecha"]
+        lectura_actual = safe_float(request.form["lectura"])
+
+        familia_nombre = next((f['nombre'] for f in datos['familias'] if f['id'] == familia_id), 'Desconocida')
+        
+        lectura_anterior = calcular_lectura_anterior(familia_id, servicio, fecha)
+        consumo = max(0, lectura_actual - lectura_anterior)
+        
+        # 1. Calcular Costo del Consumo (Energía/Agua pura)
+        if servicio == "Luz":
+            costo_unidad = datos["config"]["costo_kwh"]
+            unidad = "kWh"
+        else:
+            costo_unidad = datos["config"]["costo_m3"]
+            unidad = "m³"
+
+        costo_consumo = consumo * costo_unidad
+
+        # 2. Calcular Extras Prorrateados
+        extras_data = calcular_extras(familia_id, servicio, request.form)
+        total_extras = sum(extras_data.values())
+
+        # 3. NUEVA LÓGICA DE IMPUESTOS
+        # Base Imponible = Consumo + Extras
+        base_imponible = costo_consumo + total_extras
+        
+        # IGV sobre la suma total
+        igv_monto = base_imponible * datos["config"]["igv_porcentaje"]
+        
+        # Total Final
+        costo_total = base_imponible + igv_monto
+        
+        nuevo_consumo = {
+            "fecha": fecha, "familia_id": familia_id, "familia_nombre": familia_nombre,
+            "servicio": servicio, "lectura": lectura_actual, "lectura_anterior": lectura_anterior,
+            "consumo": consumo, "unidad": unidad, 
+            "subtotal": costo_consumo,
+            "igv_monto": igv_monto,
+            "costo_total": costo_total,
+            **extras_data 
+        }
+        
+        guardar_consumo(nuevo_consumo)
+        
+        return jsonify({
+            "success": True,
+            "data": nuevo_consumo
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
 
 @main_bp.route("/configuracion", methods=["GET", "POST"])
 def configuracion():

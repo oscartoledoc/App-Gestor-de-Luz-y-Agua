@@ -25,7 +25,7 @@
 
         <div class="bg-white rounded-2xl shadow-xl p-6 md:p-8 mb-8">
             <h2 class="text-2xl font-bold mb-6 text-gray-800">Ingresar Lectura</h2>
-            <form action="{{ url_for('main.index') }}" method="POST" class="space-y-6">
+            <form id="formRegistro" class="space-y-6">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Seleccionar Familia:</label>
                     <select name="familia" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-xl shadow-sm transition duration-200" required>
@@ -181,7 +181,10 @@
 
                 <div class="flex justify-between text-lg font-bold mt-4 pt-4 border-t text-green-700"><span>Total:</span><span id="mTotal"></span></div>
             </div>
-            <button onclick="document.getElementById('modalDetalle').classList.add('hidden')" class="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-xl">Cerrar</button>
+            <div class="flex gap-2 mt-6">
+                <button id="btnWhatsApp" onclick="enviarWhatsApp()" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-xl transition-colors">Enviar por WhatsApp</button>
+                <button onclick="document.getElementById('modalDetalle').classList.add('hidden')" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-xl">Cerrar</button>
+            </div>
         </div>
     </div>
 
@@ -192,7 +195,35 @@
                 const d = new Date();
                 dateInput.value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; 
             }
-            toggleCampos(); 
+            toggleCampos();
+        });
+
+        document.getElementById('formRegistro').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(document.getElementById('formRegistro'));
+            
+            try {
+                const response = await fetch('{{ url_for("main.registrar_consumo_ajax") }}', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    document.getElementById('formRegistro').reset();
+                    toggleCampos();
+                    const d = new Date();
+                    document.getElementById('fecha').value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                    
+                    abrirModalDesdeJSON(result.data);
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error al registrar: ' + error);
+            }
         });
 
         function toggleCampos() {
@@ -216,6 +247,38 @@
                 const txtServ = row.querySelector('.celda-servicio').textContent.toLowerCase();
                 row.style.display = (txtFam.includes(fFam) && txtServ.includes(fServ)) ? '' : 'none';
             });
+        }
+
+        function abrirModalDesdeJSON(data) {
+            document.getElementById('mFecha').textContent = data.fecha;
+            document.getElementById('mFamilia').textContent = data.familia_nombre;
+            document.getElementById('mServicio').textContent = data.servicio;
+            document.getElementById('mLecturaAnt').textContent = parseFloat(data.lectura_anterior).toFixed(2) + ' ' + data.unidad;
+            document.getElementById('mLecturaAct').textContent = parseFloat(data.lectura).toFixed(2) + ' ' + data.unidad;
+            document.getElementById('mConsumo').textContent = parseFloat(data.consumo).toFixed(2) + ' ' + data.unidad;
+            document.getElementById('mSubtotal').textContent = 'S/ ' + parseFloat(data.subtotal).toFixed(2);
+            document.getElementById('mIgv').textContent = 'S/ ' + parseFloat(data.igv_monto).toFixed(2);
+            document.getElementById('mTotal').textContent = 'S/ ' + parseFloat(data.costo_total).toFixed(2);
+
+            const boxLuz = document.getElementById('extrasLuz');
+            const boxAgua = document.getElementById('extrasAgua');
+
+            if(data.servicio === 'Luz') {
+                boxLuz.classList.remove('hidden');
+                boxAgua.classList.add('hidden');
+                document.getElementById('mLuzCargo').textContent = 'S/ ' + parseFloat(data.luz_cargo_fijo).toFixed(2);
+                document.getElementById('mLuzMant').textContent = 'S/ ' + parseFloat(data.luz_mantenimiento).toFixed(2);
+                document.getElementById('mLuzAlum').textContent = 'S/ ' + parseFloat(data.luz_alumbrado).toFixed(2);
+                document.getElementById('mLuzInt').textContent = 'S/ ' + parseFloat(data.luz_interes).toFixed(2);
+            } else {
+                boxLuz.classList.add('hidden');
+                boxAgua.classList.remove('hidden');
+                document.getElementById('mAguaAlcan').textContent = 'S/ ' + parseFloat(data.agua_alcantarillado).toFixed(2);
+                document.getElementById('mAguaCargo').textContent = 'S/ ' + parseFloat(data.agua_cargo_fijo).toFixed(2);
+            }
+
+            window.currentConsumoData = data;
+            document.getElementById('modalDetalle').classList.remove('hidden');
         }
 
         function abrirModal(row) {
@@ -246,7 +309,30 @@
                 document.getElementById('mAguaAlcan').textContent = ds.aguaAlcan;
                 document.getElementById('mAguaCargo').textContent = ds.aguaCargo;
             }
+
+            window.currentConsumoData = {
+                familia_nombre: ds.familia,
+                servicio: ds.servicio,
+                consumo: ds.consumo.split(' ')[0],
+                costo_total: ds.total.replace('S/ ', ''),
+                subtotal: ds.subtotal.replace('S/ ', ''),
+                igv_monto: ds.igv.replace('S/ ', '')
+            };
+
             document.getElementById('modalDetalle').classList.remove('hidden');
+        }
+
+        function enviarWhatsApp() {
+            const data = window.currentConsumoData;
+            if (!data) return;
+
+            const mensaje = `Consumo de ${data.servicio} - Familia ${data.familia_nombre}\n\nConsumo: ${data.consumo}\nSubtotal: S/ ${parseFloat(data.subtotal).toFixed(2)}\nIGV: S/ ${parseFloat(data.igv_monto).toFixed(2)}\nTotal: S/ ${parseFloat(data.costo_total).toFixed(2)}`;
+            
+            const numero = '51932494159';
+            const mensajeCodificado = encodeURIComponent(mensaje);
+            const url = `https://wa.me/${numero}?text=${mensajeCodificado}`;
+            
+            window.open(url, '_blank');
         }
     </script>
 </body>
